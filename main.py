@@ -366,8 +366,26 @@ async def get_cases_from_qdrant(
     except Exception as e:
         print(f"Error querying Qdrant: {str(e)}")
         return []
+        
+# Debug route for Qdrant
 
-
+@app.get("/debug/qdrant")
+async def debug_qdrant():
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else {}
+            response = await client.post(
+                f"{QDRANT_URL}/health",
+                headers=headers,
+            )
+            return {
+                "status": response.status_code,
+                "url": QDRANT_URL,
+                "response": response.json()
+            }
+    except Exception as e:
+        return {"error": str(e), "url": QDRANT_URL}
+        
 async def get_embedding(text: str) -> list[float]:
     """
     Get embedding for the question
