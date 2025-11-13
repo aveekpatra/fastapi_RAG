@@ -20,8 +20,16 @@ This example starts up a [FastAPI](https://fastapi.tiangolo.com/) server.
 
 ## 💁‍♀️ How to use
 
-- Clone locally and install packages with pip using `pip install -r requirements.txt`
-- Run locally using `hypercorn main:app --reload`
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run with uvicorn (development)
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Run with Python directly
+python -m app.main
+```
 
 ## 📝 Notes
 
