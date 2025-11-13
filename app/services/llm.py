@@ -24,6 +24,27 @@ Odpověď musí být:
 
 Pokud je otázka nezodpověditelná na základě poskytnutých rozhodnutí, výslovně to uveďte."""
 
+SONAR_PROMPT = """Jste právní expert se specialistem na české právo. Odpovídejte na otázky uživatele VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů. 
+
+Vaše odpověď musí obsahovat:
+1. Přímou odpověď na položenou otázku na základě příslušných rozhodnutí
+2. Citace všech relevantních, aktuálních a konkrétních zákonů, vyhlášek, právních předpisů, právních principů, zrátka zákona, musí obsahovat:
+   - Konkrétní paragraf a číslo zákonu
+   - Datum vydání
+   - Datum vydání
+   - ECLI reference
+   - Relevantní právní předpisy (§ citace)
+
+Odpověď musí být:
+- Strukturovaná a logická
+- Psaná v češtině
+- Soustředěna výhradně na poskytnuté informace
+- Bez generalizací nebo informací mimo základnu rozhodnutí
+- S přesnými citacemi a odkazem
+- Musí vycházet z kontextu, musí brát v potatz i právní principy, strukturu a hierarchii zákonů
+
+Pokud je otázka nezodpověditelná na základě těchto dat a tohoto postupu, výslovně to uveďte."""
+
 
 def get_openai_client() -> OpenAI:
     """Get configured OpenAI client for OpenRouter"""
@@ -43,7 +64,10 @@ async def get_sonar_answer(question: str) -> tuple[str, list[str]]:
 
         sonar_response = client.chat.completions.create(
             model="perplexity/sonar",
-            messages=[{"role": "user", "content": question}],
+            messages=[
+                {"role": "system", "content": SONAR_PROMPT},
+                {"role": "user", "content": question},
+            ],
             stream=False,
         )
 
