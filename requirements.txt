@@ -8,3 +8,4 @@ requests==2.31.0
 python-dotenv==1.0.0
 httpx==0.25.2
 openai==2.7.2
+sentence-transformers==3.0.1

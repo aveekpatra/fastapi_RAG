@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
+from sentence_transformers import SentenceTransformer
 import httpx
 import json
 
@@ -16,16 +17,16 @@ app = FastAPI()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Qdrant Configuration
 QDRANT_HOST = os.getenv("QDRANT_HOST")
 QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_HTTPS = os.getenv("QDRANT_HTTPS", "False").lower() == "true"
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION")
 
-# Build Qdrant URL
 QDRANT_PROTOCOL = "https" if QDRANT_HTTPS else "http"
 QDRANT_URL = f"{QDRANT_PROTOCOL}://{QDRANT_HOST}:{QDRANT_PORT}"
+
+embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
 class QueryRequest(BaseModel):
@@ -71,7 +72,6 @@ async def legal_query(request: QueryRequest):
             api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL
         )
 
-        # Stage 1: Get Sonar answer (AS IS, no modification)
         sonar_answer = ""
         stream = client.chat.completions.create(
             model="perplexity/sonar",
@@ -83,12 +83,10 @@ async def legal_query(request: QueryRequest):
             if chunk.choices[0].delta.content:
                 sonar_answer += chunk.choices[0].delta.content
 
-        # Stage 2: Get top 5 most relevant cases from Qdrant
         supporting_cases = await get_cases_from_qdrant(
             request.question, request.top_k
         )
 
-        # Stage 3: GPT-4o answers based on cases with citations
         case_based_answer = ""
         if supporting_cases:
             case_based_answer = await answer_based_on_cases(
@@ -109,9 +107,7 @@ async def legal_query(request: QueryRequest):
 @app.get("/legal-query-stream")
 async def legal_query_stream(question: str, top_k: int = 5):
     """
-    Streaming endpoint
-    Stage 1: Stream Sonar answer
-    Stage 2: Get cases and GPT-4o answer
+    Streaming endpoint for legal queries
     """
 
     async def generate():
@@ -120,7 +116,6 @@ async def legal_query_stream(question: str, top_k: int = 5):
                 api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL
             )
 
-            # Stage 1: Stream Sonar answer
             yield "data: {\"type\": \"sonar_start\"}\n\n"
 
             sonar_answer = ""
@@ -142,12 +137,10 @@ async def legal_query_stream(question: str, top_k: int = 5):
 
             yield "data: {\"type\": \"sonar_end\"}\n\n"
 
-            # Stage 2: Get cases from Qdrant
             yield "data: {\"type\": \"cases_fetching\"}\n\n"
 
             supporting_cases = await get_cases_from_qdrant(question, top_k)
 
-            # Stage 3: Stream GPT-4o answer based on cases
             yield "data: {\"type\": \"gpt_answer_start\"}\n\n"
 
             if supporting_cases:
@@ -162,7 +155,6 @@ async def legal_query_stream(question: str, top_k: int = 5):
 
             yield "data: {\"type\": \"gpt_answer_end\"}\n\n"
 
-            # Send supporting cases metadata
             yield "data: {\"type\": \"cases_start\"}\n\n"
 
             for case in supporting_cases:
@@ -193,11 +185,9 @@ async def answer_based_on_cases(
     question: str, cases: list[CaseResult], client: OpenAI
 ) -> str:
     """
-    GPT-4o answers the question based on all case data
-    Cites all relevant cases with full details
+    GPT-4o answers the question based on all case data with citations
     """
     try:
-        # Format all cases for context (NO TRUNCATION)
         cases_context = format_cases_for_context(cases)
 
         response = client.chat.completions.create(
@@ -205,26 +195,36 @@ async def answer_based_on_cases(
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a Czech legal expert. Answer the user's question 
-based ONLY on the provided court cases. Cite all relevant cases with:
-- Case number
-- Court name
-- Date issued
-- ECLI reference
-- Legal references (§ citations)
-- Relevant quote or reasoning from the case
+                    "content": """Jste právní expert se specialistem na české právo. Odpovídejte na otázky uživatele VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů. 
 
-Provide comprehensive analysis with proper Czech legal citations.""",
+Vaše odpověď musí obsahovat:
+1. Přímou odpověď na položenou otázku na základě příslušných rozhodnutí
+2. Citace všech relevantních rozhodnutí s následujícími údaji:
+   - Spisová značka rozsudku
+   - Název soudu
+   - Datum vydání
+   - ECLI reference
+   - Relevantní právní předpisy (§ citace)
+   - Klíčové právní principy nebo závěry z rozhodnutí
+
+Odpověď musí být:
+- Strukturovaná a logická
+- Psaná v češtině
+- Soustředěna výhradně na poskytnutá rozhodnutí
+- Bez generalizací nebo informací mimo základnu rozhodnutí
+- S přesnými citacemi a odkazem na čísla případů
+
+Pokud je otázka nezodpověditelná na základě poskytnutých rozhodnutí, výslovně to uveďte.""",
                 },
                 {
                     "role": "user",
-                    "content": f"""Question: {question}
+                    "content": f"""Otázka: {question}
 
-Based on these Czech court cases, please answer the question with full citations:
+Na základě těchto českých soudních rozhodnutí prosím odpovězte na otázku s detailními citacemi:
 
 {cases_context}
 
-Provide a detailed answer citing all relevant cases.""",
+Poskytněte podrobnou odpověď s citacemi všech relevantních rozhodnutí.""",
                 },
             ],
             temperature=0.5,
@@ -235,7 +235,7 @@ Provide a detailed answer citing all relevant cases.""",
         return answer
 
     except Exception as e:
-        print(f"Error generating case-based answer: {str(e)}")
+        print(f"Chyba pri generovani odpovedi zalozene na pripadech: {str(e)}")
         return ""
 
 
@@ -253,26 +253,36 @@ async def answer_based_on_cases_stream(
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a Czech legal expert. Answer the user's question 
-based ONLY on the provided court cases. Cite all relevant cases with:
-- Case number
-- Court name
-- Date issued
-- ECLI reference
-- Legal references (§ citations)
-- Relevant quote or reasoning from the case
+                    "content": """Jste právní expert se specialistem na české právo. Odpovídejte na otázky uživatele VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů. 
 
-Provide comprehensive analysis with proper Czech legal citations.""",
+Vaše odpověď musí obsahovat:
+1. Přímou odpověď na položenou otázku na základě příslušných rozhodnutí
+2. Citace všech relevantních rozhodnutí s následujícími údaji:
+   - Spisová značka rozsudku
+   - Název soudu
+   - Datum vydání
+   - ECLI reference
+   - Relevantní právní předpisy (§ citace)
+   - Klíčové právní principy nebo závěry z rozhodnutí
+
+Odpověď musí být:
+- Strukturovaná a logická
+- Psaná v češtině
+- Soustředěna výhradně na poskytnutá rozhodnutí
+- Bez generalizací nebo informací mimo základnu rozhodnutí
+- S přesnými citacemi a odkazem na čísla případů
+
+Pokud je otázka nezodpověditelná na základě poskytnutých rozhodnutí, výslovně to uveďte.""",
                 },
                 {
                     "role": "user",
-                    "content": f"""Question: {question}
+                    "content": f"""Otázka: {question}
 
-Based on these Czech court cases, please answer the question with full citations:
+Na základě těchto českých soudních rozhodnutí prosím odpovězte na otázku s detailními citacemi:
 
 {cases_context}
 
-Provide a detailed answer citing all relevant cases.""",
+Poskytněte podrobnou odpověď s citacemi všech relevantních rozhodnutí.""",
                 },
             ],
             temperature=0.5,
@@ -285,28 +295,28 @@ Provide a detailed answer citing all relevant cases.""",
                 yield chunk.choices[0].delta.content
 
     except Exception as e:
-        print(f"Error streaming case-based answer: {str(e)}")
+        print(f"Chyba pri streamovani odpovedi: {str(e)}")
 
 
 def format_cases_for_context(cases: list[CaseResult]) -> str:
     """
-    Format all cases (NO TRUNCATION) for GPT context
+    Format all cases for GPT context without truncation
     """
     context = ""
     for i, case in enumerate(cases, 1):
         context += f"""
-CASE {i}:
-Case Number: {case.case_number}
-Court: {case.court}
-Judge: {case.judge or "N/A"}
-Date Issued: {case.date_issued}
-Date Published: {case.date_published}
+ROZHODNUTÍ {i}:
+Spisová značka: {case.case_number}
+Soud: {case.court}
+Soudce: {case.judge or "Neuvedeno"}
+Datum vydání: {case.date_issued}
+Datum publikace: {case.date_published}
 ECLI: {case.ecli}
-Subject: {case.subject}
-Keywords: {', '.join(case.keywords)}
-Legal References: {', '.join(case.legal_references)}
-Source URL: {case.source_url}
-Relevance Score: {case.relevance_score}
+Předmět sporu: {case.subject}
+Klíčová slova: {', '.join(case.keywords) if case.keywords else 'Neuvedena'}
+Právní předpisy: {', '.join(case.legal_references) if case.legal_references else 'Neuvedeny'}
+Zdroj: {case.source_url}
+Relevance: {case.relevance_score}
 ---
 """
     return context
@@ -316,29 +326,36 @@ async def get_cases_from_qdrant(
     question: str, top_k: int
 ) -> list[CaseResult]:
     """
-    Search Qdrant for top K most relevant cases
-    Returns full case data (NO TRUNCATION)
+    Search Qdrant for most relevant cases using sentence transformers
     """
     try:
         vector = await get_embedding(question)
 
+        if vector is None:
+            print("Chyba: Nepodařilo se vygenerovat vektorové vyjádření")
+            return []
+
         async with httpx.AsyncClient() as client:
+            headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else {}
+
             response = await client.post(
                 f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search",
-                headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else {},
+                headers=headers,
                 json={
                     "vector": vector,
                     "limit": top_k,
                     "with_payload": True,
                 },
+                timeout=10.0,
             )
 
             if response.status_code != 200:
-                raise Exception(
-                    f"Qdrant search failed: {response.text}"
-                )
+                print(f"Chyba pri hledani v Qdrant: {response.status_code}")
+                print(f"Odpověď: {response.text}")
+                return []
 
             results = response.json()
+            print(f"Nalezeno {len(results.get('result', []))} případů")
 
             cases = []
             for result in results.get("result", []):
@@ -353,9 +370,7 @@ async def get_cases_from_qdrant(
                         date_published=payload.get("date_published"),
                         ecli=payload.get("ecli"),
                         keywords=payload.get("keywords", []),
-                        legal_references=payload.get(
-                            "legal_references", []
-                        ),
+                        legal_references=payload.get("legal_references", []),
                         source_url=payload.get("source_url"),
                         relevance_score=result.get("score", 0.0),
                     )
@@ -364,28 +379,44 @@ async def get_cases_from_qdrant(
             return cases
 
     except Exception as e:
-        print(f"Error querying Qdrant: {str(e)}")
+        print(f"Chyba pri dotazu na Qdrant: {str(e)}")
         return []
-        
-# Debug route for Qdrant
+
+
+async def get_embedding(text: str) -> Optional[list[float]]:
+    """
+    Get embedding using sentence transformers (paraphrase-multilingual-MiniLM-L12-v2)
+    Must match the model used for Qdrant storage
+    """
+    try:
+        embedding = embedding_model.encode(text).tolist()
+        print(f"Vektorové vyjádření generováno: {len(embedding)} dimenzí")
+        return embedding
+
+    except Exception as e:
+        print(f"Chyba pri generovani vektoru: {str(e)}")
+        return None
+
 
 @app.get("/debug/qdrant")
 async def debug_qdrant():
+    """
+    Debug endpoint to verify Qdrant connection
+    """
     try:
         async with httpx.AsyncClient() as client:
             headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else {}
-            
-            # Try collections endpoint instead
+
             response = await client.get(
                 f"{QDRANT_URL}/collections",
                 headers=headers,
                 timeout=10.0,
             )
-            
+
             return {
                 "status": response.status_code,
                 "url": QDRANT_URL,
-                "text": response.text[:500],  # First 500 chars
+                "text": response.text[:500],
                 "headers": dict(response.headers),
             }
     except Exception as e:
@@ -394,26 +425,6 @@ async def debug_qdrant():
             "url": QDRANT_URL,
             "type": type(e).__name__
         }
-        
-async def get_embedding(text: str) -> list[float]:
-    """
-    Get embedding for the question
-    """
-    try:
-        client = OpenAI(
-            api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL
-        )
-
-        response = client.embeddings.create(
-            model="openai/text-embedding-3-small",
-            input=text,
-        )
-
-        return response.data[0].embedding
-
-    except Exception as e:
-        print(f"Error getting embedding: {str(e)}")
-        return [0.0] * 1536
 
 
 if __name__ == "__main__":
