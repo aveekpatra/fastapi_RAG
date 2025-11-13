@@ -374,17 +374,26 @@ async def debug_qdrant():
     try:
         async with httpx.AsyncClient() as client:
             headers = {"api-key": QDRANT_API_KEY} if QDRANT_API_KEY else {}
-            response = await client.post(
-                f"{QDRANT_URL}/health",
+            
+            # Try collections endpoint instead
+            response = await client.get(
+                f"{QDRANT_URL}/collections",
                 headers=headers,
+                timeout=10.0,
             )
+            
             return {
                 "status": response.status_code,
                 "url": QDRANT_URL,
-                "response": response.json()
+                "text": response.text[:500],  # First 500 chars
+                "headers": dict(response.headers),
             }
     except Exception as e:
-        return {"error": str(e), "url": QDRANT_URL}
+        return {
+            "error": str(e),
+            "url": QDRANT_URL,
+            "type": type(e).__name__
+        }
         
 async def get_embedding(text: str) -> list[float]:
     """
