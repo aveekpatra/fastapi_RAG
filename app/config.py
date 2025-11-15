@@ -25,6 +25,10 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 
+    # Qdrant retry configuration for serverless cold starts
+    QDRANT_MAX_RETRIES: int = int(os.getenv("QDRANT_MAX_RETRIES", "3"))
+    QDRANT_INITIAL_TIMEOUT: int = int(os.getenv("QDRANT_INITIAL_TIMEOUT", "30"))
+
     @property
     def qdrant_protocol(self) -> str:
         return "https" if self.QDRANT_HTTPS else "http"

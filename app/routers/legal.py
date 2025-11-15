@@ -15,6 +15,7 @@ from app.services.llm import (
     answer_based_on_cases_stream,
     get_openai_client,
     get_sonar_answer,
+    get_sonar_answer_stream,
 )
 from app.services.qdrant import get_cases_from_qdrant
 
@@ -55,22 +56,25 @@ async def web_search_stream(
         try:
             yield 'data: {"type": "web_search_start"}\n\n'
 
-            # Get Sonar response with citations
-            answer, citations = await get_sonar_answer(question)
-
-            # Stream the answer text
-            for char in answer:
-                data = {
-                    "type": "answer_chunk",
-                    "content": char,
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-
-            # Send citations
-            if citations:
-                yield f"data: {
-                    json.dumps({'type': 'citations', 'citations': citations})
-                }\n\n"
+            # Stream Sonar response directly
+            sonar_stream = get_sonar_answer_stream(question)
+            async for chunk_text, final_answer, citations in sonar_stream:
+                if chunk_text:
+                    # Stream individual chunk
+                    data = {
+                        "type": "web_answer_chunk",
+                        "content": chunk_text,
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                elif final_answer is not None:
+                    # Final chunk with complete answer and citations
+                    if citations:
+                        yield f"data: {
+                            json.dumps(
+                                {'type': 'web_citations', 'citations': citations}
+                            )
+                        }\n\n"
+                    break
 
             yield 'data: {"type": "web_search_end"}\n\n'
 
@@ -136,7 +140,7 @@ async def case_search_stream(
                     question, supporting_cases, client
                 ):
                     data = {
-                        "type": "answer_chunk",
+                        "type": "case_answer_chunk",
                         "content": chunk,
                     }
                     yield f"data: {json.dumps(data)}\n\n"
@@ -221,22 +225,25 @@ async def combined_search_stream(
             # Web Search Part
             yield 'data: {"type": "web_search_start"}\n\n'
 
-            # Get Sonar response with citations
-            web_answer, web_citations = await get_sonar_answer(question)
-
-            # Stream the web answer text
-            for char in web_answer:
-                data = {
-                    "type": "web_answer_chunk",
-                    "content": char,
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-
-            # Send web citations
-            if web_citations:
-                yield f"data: {
-                    json.dumps({'type': 'web_citations', 'citations': web_citations})
-                }\n\n"
+            # Stream Sonar response directly
+            sonar_stream = get_sonar_answer_stream(question)
+            async for chunk_text, final_answer, web_citations in sonar_stream:
+                if chunk_text:
+                    # Stream individual chunk
+                    data = {
+                        "type": "web_answer_chunk",
+                        "content": chunk_text,
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                elif final_answer is not None:
+                    # Final chunk with complete answer and citations
+                    if web_citations:
+                        yield f"data: {
+                            json.dumps(
+                                {'type': 'web_citations', 'citations': web_citations}
+                            )
+                        }\n\n"
+                    break
 
             yield 'data: {"type": "web_search_end"}\n\n'
 
