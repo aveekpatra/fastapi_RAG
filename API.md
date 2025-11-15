@@ -239,6 +239,7 @@ data: {"type": "done"}
 ---
 
 ### 6. Debug
+#### Standard (Non-Streaming)
 ```
 GET /debug/qdrant?api_key=KEY
 ```
@@ -471,7 +472,7 @@ QDRANT_INITIAL_TIMEOUT=30
 ALLOWED_ORIGINS=http://localhost:3000,https://yourdomain.com
 ```
 
-## Error Handling
+### Error Handling
 
 Common error responses:
 ```json
@@ -501,3 +502,4 @@ Common error responses:
 - Czech characters work correctly with proper encoding
 - Streaming endpoints provide real-time responses as they are generated
 - Case search uses Czech court case database with sentence transformer embeddings
+- Web search endpoints now properly include citations in both streaming and non-streaming modes

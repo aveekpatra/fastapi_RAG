@@ -42,7 +42,7 @@ Odpověď musí být:
 - Soustředěna výhradně na poskytnuté informace
 - Bez generalizací nebo informací mimo základnu rozhodnutí
 - S přesnými citacemi a odkazem
-- Musí vycházet z kontextu, musí brát v potatz i právní principy, strukturu a hierarchii zákonů
+- Musí vycházet z kontextu, musí brát v potaz i právní principy, strukturu a hierarchii zákonů
 
 Pokud je otázka nezodpověditelná na základě těchto dat a tohoto postupu, výslovně to uveďte."""
 
@@ -114,7 +114,7 @@ async def get_sonar_answer_stream(question: str):
                 full_answer += content
                 yield content, None, None
 
-        # Final yield with complete answer (no citations in streaming mode)
+        # Final yield with complete answer (no citations in streaming for now)
         yield None, full_answer, []
 
     except Exception as e:
