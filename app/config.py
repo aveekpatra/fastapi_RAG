@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,6 +20,10 @@ class Settings:
     # Server configuration
     PORT: int = int(os.getenv("PORT", "8000"))
     HOST: str = os.getenv("HOST", "0.0.0.0")
+
+    # API security
+    API_KEY: str = os.getenv("API_KEY", "")
+    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 
     @property
     def qdrant_protocol(self) -> str:
