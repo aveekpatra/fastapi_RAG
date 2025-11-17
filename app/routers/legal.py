@@ -281,6 +281,10 @@ async def combined_search_stream(
         try:
             client = get_openai_client()
 
+            # Store answers for summary
+            web_answer_full = ""
+            case_answer_full = ""
+
             # Web Search Part
             yield 'data: {"type": "web_search_start"}\n\n'
 
@@ -288,6 +292,7 @@ async def combined_search_stream(
             sonar_stream = get_sonar_answer_stream(question)
             async for chunk_text, final_answer, web_citations in sonar_stream:
                 if chunk_text:
+                    web_answer_full += chunk_text
                     # Stream individual chunk
                     data = {
                         "type": "web_answer_chunk",
@@ -295,6 +300,7 @@ async def combined_search_stream(
                     }
                     yield f"data: {json.dumps(data)}\n\n"
                 elif final_answer is not None:
+                    web_answer_full = final_answer
                     # Final chunk with complete answer and citations
                     if web_citations:
                         yield f"data: {
@@ -324,6 +330,7 @@ async def combined_search_stream(
                 async for chunk in answer_based_on_cases_stream(
                     question, supporting_cases, client
                 ):
+                    case_answer_full += chunk
                     data = {
                         "type": "case_answer_chunk",
                         "content": chunk,
@@ -349,6 +356,24 @@ async def combined_search_stream(
                     "source_url": case.source_url,
                 }
                 yield f"data: {json.dumps(case_data)}\n\n"
+
+            yield 'data: {"type": "case_search_end"}\n\n'
+
+            # Generate combined summary
+            if web_answer_full and case_answer_full:
+                yield 'data: {"type": "summary_start"}\n\n'
+                
+                from app.services.llm import generate_combined_summary_stream
+                async for summary_chunk in generate_combined_summary_stream(
+                    question, web_answer_full, case_answer_full, client
+                ):
+                    data = {
+                        "type": "summary_chunk",
+                        "content": summary_chunk,
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                
+                yield 'data: {"type": "summary_end"}\n\n'
 
             yield 'data: {"type": "combined_search_end"}\n\n'
 

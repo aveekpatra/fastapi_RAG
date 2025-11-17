@@ -280,3 +280,58 @@ Začněte analýzou relevance rozhodnutí.""",
         import traceback
         traceback.print_exc()
         traceback.print_exc()
+
+
+
+async def generate_combined_summary_stream(
+    question: str,
+    web_answer: str,
+    case_answer: str,
+    client: OpenAI
+):
+    """
+    Generate a concise summary combining web and case search results
+    """
+    try:
+        summary_prompt = """Jste právní expert. Máte k dispozici dvě odpovědi na stejnou otázku:
+1. Odpověď z webového vyhledávání (aktuální právní informace)
+2. Odpověď založená na soudních rozhodnutích (judikatura)
+
+Vytvořte KRÁTKÉ shrnutí (2-3 věty), které:
+- Syntetizuje obě odpovědi
+- Zdůrazní klíčové body
+- Ukáže, jak se webové informace a judikatura doplňují
+- Buďte stručný a jasný
+
+NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
+
+        stream = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": summary_prompt},
+                {
+                    "role": "user",
+                    "content": f"""OTÁZKA:
+{question}
+
+WEBOVÁ ODPOVĚĎ:
+{web_answer[:1000]}
+
+ODPOVĚĎ ZE SOUDNÍCH ROZHODNUTÍ:
+{case_answer[:1000]}
+
+Vytvořte krátké shrnutí (2-3 věty):"""
+                }
+            ],
+            temperature=0.3,
+            max_tokens=300,
+            stream=True,
+        )
+
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    except Exception as e:
+        print(f"Error generating summary: {str(e)}")
+        yield ""
