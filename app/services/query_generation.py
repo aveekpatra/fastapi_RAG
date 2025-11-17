@@ -43,7 +43,7 @@ POSTUP:
 Nyní vygenerujte 2-3 optimalizované vyhledávací dotazy pro následující otázku:"""
 
 
-async def generate_search_queries(question: str, client: OpenAI, num_queries: int = 3) -> list[str]:
+async def generate_search_queries(question: str, client: OpenAI, num_queries: int = 2) -> list[str]:
     """
     Generate multiple optimized search queries from a user question
     MAINTAINS ORIGINAL MEANING while expanding search coverage
@@ -63,8 +63,8 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
                 {"role": "system", "content": QUERY_GENERATION_PROMPT},
                 {"role": "user", "content": question}
             ],
-            temperature=0.5,  # Lower temperature for more focused, relevant queries
-            max_tokens=300,
+            temperature=0.5,  # Hardcoded: Lower temperature for focused queries
+            max_tokens=300,  # Hardcoded: Enough for 2-3 short queries
         )
         
         generated_text = (response.choices[0].message.content or "").strip()

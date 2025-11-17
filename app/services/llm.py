@@ -224,8 +224,8 @@ DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
 Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
-            temperature=0.3,  # Snížená teplota pro menší halucinace
-            max_tokens=4000,  # Increased for longer, more detailed responses
+            temperature=0.3,  # Hardcoded: Low temperature to reduce hallucinations
+            max_tokens=4000,  # Hardcoded: High limit for detailed responses with full context
         )
 
         answer = (response.choices[0].message.content or "").strip()
@@ -285,8 +285,8 @@ DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
 Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
-            temperature=0.3,  # Snížená teplota pro menší halucinace
-            max_tokens=4000,  # Increased for longer, more detailed responses
+            temperature=0.3,  # Hardcoded: Low temperature to reduce hallucinations
+            max_tokens=4000,  # Hardcoded: High limit for detailed responses with full context
             stream=True,
         )
 

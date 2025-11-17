@@ -254,7 +254,7 @@ async def _get_cases_improved_rag(
         queries = await generate_search_queries(
             question, 
             openai_client, 
-            num_queries=settings.NUM_GENERATED_QUERIES
+            num_queries=2  # Hardcoded: original + 1 variant
         )
         
         print(f"\n📝 Generated {len(queries)} queries (including original)")
@@ -264,10 +264,10 @@ async def _get_cases_improved_rag(
         
         final_cases = await hybrid_search_engine.multi_query_hybrid_search(
             queries=queries,
-            results_per_query=settings.RESULTS_PER_QUERY,
+            results_per_query=10,  # Hardcoded: 10 results per query
             final_limit=top_k,
-            dense_weight=0.7,  # 70% semantic similarity
-            sparse_weight=0.3   # 30% keyword matching
+            dense_weight=0.7,  # Hardcoded: 70% semantic similarity
+            sparse_weight=0.3   # Hardcoded: 30% keyword matching
         )
         
         print(f"\n✅ Improved RAG pipeline returned {len(final_cases)} cases")
