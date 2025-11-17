@@ -29,6 +29,12 @@ class Settings:
     QDRANT_MAX_RETRIES: int = int(os.getenv("QDRANT_MAX_RETRIES", "3"))
     QDRANT_INITIAL_TIMEOUT: int = int(os.getenv("QDRANT_INITIAL_TIMEOUT", "30"))
 
+    # Improved RAG pipeline configuration
+    USE_IMPROVED_RAG: bool = os.getenv("USE_IMPROVED_RAG", "False").lower() == "true"
+    NUM_GENERATED_QUERIES: int = int(os.getenv("NUM_GENERATED_QUERIES", "3"))
+    RESULTS_PER_QUERY: int = int(os.getenv("RESULTS_PER_QUERY", "10"))
+    FINAL_TOP_K: int = int(os.getenv("FINAL_TOP_K", "5"))
+
     @property
     def qdrant_protocol(self) -> str:
         return "https" if self.QDRANT_HTTPS else "http"

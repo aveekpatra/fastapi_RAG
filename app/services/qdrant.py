@@ -1,14 +1,53 @@
 import asyncio
 
 import httpx
+from openai import OpenAI
 
 from app.config import settings
 from app.models import CaseResult
 from app.services.embedding import get_embedding
+from app.services.query_generation import generate_search_queries
+from app.services.hybrid_search import multi_query_hybrid_search, simple_rerank
 
 
-async def get_cases_from_qdrant(question: str, top_k: int) -> list[CaseResult]:
+async def get_cases_from_qdrant(
+    question: str, 
+    top_k: int, 
+    use_improved_rag: bool = None,
+    openai_client: OpenAI = None
+) -> list[CaseResult]:
     """
+    Search Qdrant for most relevant cases
+    
+    Args:
+        question: User's question
+        top_k: Number of final results to return
+        use_improved_rag: Whether to use improved RAG pipeline (query generation + hybrid search)
+                         If None, uses settings.USE_IMPROVED_RAG
+        openai_client: OpenAI client for query generation (required if use_improved_rag=True)
+    
+    Returns:
+        List of CaseResult objects
+    
+    Implements two approaches:
+    1. Basic: Single vector search (original approach)
+    2. Improved: Query generation + multi-query hybrid search + reranking
+    """
+    # Determine which approach to use
+    if use_improved_rag is None:
+        use_improved_rag = settings.USE_IMPROVED_RAG
+    
+    if use_improved_rag:
+        print("Using IMPROVED RAG pipeline (query generation + hybrid search)")
+        return await _get_cases_improved_rag(question, top_k, openai_client)
+    else:
+        print("Using BASIC RAG pipeline (single vector search)")
+        return await _get_cases_basic(question, top_k)
+
+
+async def _get_cases_basic(question: str, top_k: int) -> list[CaseResult]:
+    """
+    Original basic vector search approach
     Search Qdrant for most relevant cases using sentence transformers
     Implements retry logic with exponential backoff for serverless cold starts
     """
@@ -162,3 +201,66 @@ async def debug_qdrant_connection() -> dict:
         "url": settings.qdrant_url,
         "attempts": max_retries,
     }
+
+
+
+async def _get_cases_improved_rag(
+    question: str, 
+    top_k: int,
+    openai_client: OpenAI = None
+) -> list[CaseResult]:
+    """
+    Improved RAG pipeline with query generation and hybrid search
+    
+    Steps:
+    1. Generate 2-3 optimized search queries from the user question
+    2. Perform hybrid search (vector + BM25) for each query
+    3. Merge and deduplicate results
+    4. Rerank top 10-15 results
+    5. Return final top K results
+    
+    Args:
+        question: User's question
+        top_k: Number of final results to return
+        openai_client: OpenAI client for query generation
+    
+    Returns:
+        List of CaseResult objects
+    """
+    try:
+        # Step 1: Generate search queries
+        if openai_client is None:
+            from app.services.llm import get_openai_client
+            openai_client = get_openai_client()
+        
+        queries = await generate_search_queries(
+            question, 
+            openai_client, 
+            num_queries=settings.NUM_GENERATED_QUERIES
+        )
+        
+        # Step 2 & 3: Multi-query hybrid search with merging
+        merged_cases = await multi_query_hybrid_search(
+            queries,
+            results_per_query=settings.RESULTS_PER_QUERY
+        )
+        
+        if not merged_cases:
+            print("No cases found with improved RAG pipeline")
+            return []
+        
+        # Step 4: Rerank (currently simple, can be enhanced with cross-encoder)
+        # Take top 10-15 for reranking
+        candidates_for_reranking = merged_cases[:15]
+        
+        # Step 5: Return final top K
+        final_cases = simple_rerank(candidates_for_reranking, top_k)
+        
+        print(f"Improved RAG pipeline returned {len(final_cases)} cases")
+        return final_cases
+        
+    except Exception as e:
+        print(f"Error in improved RAG pipeline: {str(e)}")
+        print("Falling back to basic search")
+        # Fallback to basic search
+        return await _get_cases_basic(question, top_k)

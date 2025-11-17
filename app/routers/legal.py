@@ -87,20 +87,35 @@ async def web_search_stream(
 # Case Search (Qdrant + GPT) Only Endpoints
 @router.post("/case-search", response_model=CaseSearchResponse)
 async def case_search(
-    request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)
+    request: QueryRequest, 
+    api_key_valid: bool = Depends(verify_api_key),
+    use_improved_rag: bool = Query(
+        None, 
+        description="Use improved RAG pipeline (query generation + hybrid search). If not specified, uses config default."
+    )
 ):
     """
     Case search using Qdrant + GPT only
     Returns answer based on court cases without web search
+    
+    Supports two modes:
+    - Basic: Single vector search (original)
+    - Improved: Query generation + hybrid search + reranking (set use_improved_rag=true or USE_IMPROVED_RAG env var)
     """
     try:
-        # Get supporting cases from Qdrant
-        supporting_cases = await get_cases_from_qdrant(request.question, request.top_k)
+        client = get_openai_client()
+        
+        # Get supporting cases from Qdrant (with optional improved RAG)
+        supporting_cases = await get_cases_from_qdrant(
+            request.question, 
+            request.top_k,
+            use_improved_rag=use_improved_rag,
+            openai_client=client
+        )
 
         # Generate case-based answer
         answer = ""
         if supporting_cases:
-            client = get_openai_client()
             answer = await answer_based_on_cases(
                 request.question, supporting_cases, client
             )
@@ -117,10 +132,18 @@ async def case_search(
 async def case_search_stream(
     question: str = Query(..., description="Legal question to search"),
     top_k: int = Query(5, description="Number of cases to retrieve"),
+    use_improved_rag: bool = Query(
+        None, 
+        description="Use improved RAG pipeline (query generation + hybrid search)"
+    ),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
     """
     Streaming case search using Qdrant + GPT only
+    
+    Supports two modes:
+    - Basic: Single vector search (original)
+    - Improved: Query generation + hybrid search + reranking
     """
 
     async def generate():
@@ -131,7 +154,12 @@ async def case_search_stream(
 
             yield 'data: {"type": "cases_fetching"}\n\n'
 
-            supporting_cases = await get_cases_from_qdrant(question, top_k)
+            supporting_cases = await get_cases_from_qdrant(
+                question, 
+                top_k,
+                use_improved_rag=use_improved_rag,
+                openai_client=client
+            )
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
 
@@ -176,23 +204,38 @@ async def case_search_stream(
 # Combined Search (Web + Case) Endpoints
 @router.post("/combined-search", response_model=CombinedSearchResponse)
 async def combined_search(
-    request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)
+    request: QueryRequest, 
+    api_key_valid: bool = Depends(verify_api_key),
+    use_improved_rag: bool = Query(
+        None, 
+        description="Use improved RAG pipeline for case search"
+    )
 ):
     """
     Combined search using both web (Sonar) and case (Qdrant + GPT) sources
     Returns answers from both sources with citations and case information
+    
+    Case search supports two modes:
+    - Basic: Single vector search (original)
+    - Improved: Query generation + hybrid search + reranking
     """
     try:
+        client = get_openai_client()
+        
         # Get Sonar answer with citations
         web_answer, web_citations = await get_sonar_answer(request.question)
 
-        # Get supporting cases from Qdrant
-        supporting_cases = await get_cases_from_qdrant(request.question, request.top_k)
+        # Get supporting cases from Qdrant (with optional improved RAG)
+        supporting_cases = await get_cases_from_qdrant(
+            request.question, 
+            request.top_k,
+            use_improved_rag=use_improved_rag,
+            openai_client=client
+        )
 
         # Generate case-based answer
         case_answer = ""
         if supporting_cases:
-            client = get_openai_client()
             case_answer = await answer_based_on_cases(
                 request.question, supporting_cases, client
             )
@@ -212,10 +255,18 @@ async def combined_search(
 async def combined_search_stream(
     question: str = Query(..., description="Legal question to search"),
     top_k: int = Query(5, description="Number of cases to retrieve"),
+    use_improved_rag: bool = Query(
+        None, 
+        description="Use improved RAG pipeline for case search"
+    ),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
     """
     Streaming combined search using both web (Sonar) and case (Qdrant + GPT) sources
+    
+    Case search supports two modes:
+    - Basic: Single vector search (original)
+    - Improved: Query generation + hybrid search + reranking
     """
 
     async def generate():
@@ -252,7 +303,12 @@ async def combined_search_stream(
 
             yield 'data: {"type": "cases_fetching"}\n\n'
 
-            supporting_cases = await get_cases_from_qdrant(question, top_k)
+            supporting_cases = await get_cases_from_qdrant(
+                question, 
+                top_k,
+                use_improved_rag=use_improved_rag,
+                openai_client=client
+            )
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
 
