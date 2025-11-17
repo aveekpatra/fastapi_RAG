@@ -231,8 +231,11 @@ async def answer_based_on_cases_stream(
     Stream GPT-4o answer based on cases
     """
     try:
+        print(f"📝 Formatting {len(cases)} cases for context...")
         cases_context = format_cases_for_context(cases)
+        print(f"📝 Context length: {len(cases_context)} characters")
 
+        print(f"🤖 Starting OpenAI streaming...")
         stream = client.chat.completions.create(
             model="openai/gpt-4o-mini",
             messages=[
@@ -260,9 +263,19 @@ Začněte analýzou relevance rozhodnutí.""",
             stream=True,
         )
 
+        chunk_count = 0
         for chunk in stream:
             if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                chunk_count += 1
+                content = chunk.choices[0].delta.content
+                yield content
+        
+        print(f"✅ Yielded {chunk_count} chunks from OpenAI")
+        
+        if chunk_count == 0:
+            print("⚠️ WARNING: OpenAI returned 0 chunks!")
 
     except Exception as e:
-        print(f"Chyba pri streamovani odpovedi: {str(e)}")
+        print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
+        import traceback
+        traceback.print_exc()

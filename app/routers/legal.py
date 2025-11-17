@@ -161,17 +161,25 @@ async def case_search_stream(
                 openai_client=client
             )
 
+            print(f"🔍 Found {len(supporting_cases)} cases for question: {question[:50]}...")
+
             yield 'data: {"type": "gpt_answer_start"}\n\n'
 
             if supporting_cases:
+                print(f"✅ Starting to stream answer for {len(supporting_cases)} cases")
+                chunk_count = 0
                 async for chunk in answer_based_on_cases_stream(
                     question, supporting_cases, client
                 ):
+                    chunk_count += 1
                     data = {
                         "type": "case_answer_chunk",
                         "content": chunk,
                     }
                     yield f"data: {json.dumps(data)}\n\n"
+                print(f"✅ Streamed {chunk_count} chunks")
+            else:
+                print("⚠️ No supporting cases found, skipping answer generation")
 
             yield 'data: {"type": "gpt_answer_end"}\n\n'
 
