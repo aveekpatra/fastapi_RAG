@@ -104,10 +104,14 @@ async def get_sonar_answer_stream(question: str):
     """
     Get streaming answer from Perplexity Sonar with citations
     Yields: (chunk_text, final_answer, citations_list)
+    
+    Note: Perplexity's streaming API doesn't include citations in chunks.
+    We need to make a separate non-streaming call to get citations.
     """
     try:
         client = get_openai_client()
 
+        # Start streaming the answer
         stream = client.chat.completions.create(
             model="perplexity/sonar",
             messages=[
@@ -118,15 +122,41 @@ async def get_sonar_answer_stream(question: str):
         )
 
         full_answer = ""
+        citations = []
 
+        # Stream the content
         for chunk in stream:
             if chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
                 full_answer += content
                 yield content, None, None
 
-        # Final yield with complete answer (no citations in streaming for now)
-        yield None, full_answer, []
+        # After streaming completes, make a non-streaming call to get citations
+        # This is necessary because Perplexity's streaming API doesn't include citations
+        try:
+            citation_response = client.chat.completions.create(
+                model="perplexity/sonar",
+                messages=[
+                    {"role": "system", "content": SONAR_PROMPT},
+                    {"role": "user", "content": question},
+                ],
+                stream=False,
+            )
+            
+            # Extract citations from the response
+            citations = getattr(citation_response, "citations", [])
+            if not citations:
+                # Fallback to search_results if citations not available
+                search_results = getattr(citation_response, "search_results", [])
+                citations = [
+                    result.get("url", "") for result in search_results if result.get("url")
+                ]
+        except Exception as citation_error:
+            print(f"Error fetching citations: {str(citation_error)}")
+            citations = []
+
+        # Final yield with complete answer and citations
+        yield None, full_answer, citations
 
     except Exception as e:
         print(f"Chyba pri ziskani Sonar odpovedi: {str(e)}")
