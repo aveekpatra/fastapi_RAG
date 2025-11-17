@@ -39,8 +39,13 @@ V případě [^2], soud dospěl k závěru, že [konkrétní závěr]. Odůvodn�
 - [Konkrétní poučení 3 z odůvodnění]
 
 **Citované případy:**
-[^1]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
-[^2]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
+[^1]: [[Spisová značka]](URL) - [Soud], [Datum], ECLI: [ECLI]
+[^2]: [[Spisová značka]](URL) - [Soud], [Datum], ECLI: [ECLI]
+
+DŮLEŽITÉ: Vytvořte KLIKATELNÉ odkazy ve formátu Markdown:
+- Použijte: [[Spisová značka]](URL)
+- URL najdete v části "ZDROJ" každého rozhodnutí
+- Příklad: [[8 C 171/2023-103]](https://rozhodnuti.justice.cz/api/finaldoc/abc123)
 
 ---
 
@@ -53,7 +58,11 @@ V případě [^2] soud odmítl návrh na rozvod, protože předložená dohoda n
 **Co jsme se naučili:**
 - Dohoda musí být konkrétní a úplná, ne obecná
 - Musí obsahovat: výživné (částka + periodicita), bydlení dítěte, výkon rodičovské odpovědnosti
-- Bez schválené dohody soud rozvod nevysloví"
+- Bez schválené dohody soud rozvod nevysloví
+
+**Citované případy:**
+[^1]: [[25 Cdo 1234/2020]](https://rozhodnuti.justice.cz/api/finaldoc/abc123) - Nejvyšší soud, 2020-05-15, ECLI: ECLI:CZ:NS:2020:25.CDO.1234.2020.1
+[^2]: [[10 C 567/2019]](https://rozhodnuti.justice.cz/api/finaldoc/def456) - Okresní soud v Praze, 2019-11-20, ECLI: ECLI:CZ:OSPH:2019:10.C.567.2019.1"
 
 ---
 
