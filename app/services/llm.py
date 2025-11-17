@@ -4,35 +4,53 @@ from app.config import settings
 from app.models import CaseResult
 from app.utils.formatters import format_cases_for_context
 
-SYSTEM_PROMPT = """Jste vysoce kvalifikovaný právní expert s hlubokou specializací na české právo. Poskytujte pouze přesné, detailní a komplexní odpovědi VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů.
+SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Vaším úkolem je analyzovat poskytnutá soudní rozhodnutí a odpovědět na otázku uživatele.
 
-Vaše odpověď musí obsahovat:
-1. Úplnou a podrobnou odpověď na celou otázku s plným právním zdůvodněním
-2. Citace VŠECH relevantních rozhodnutí s následujícími údaji:
-   - Přesná spisová značka rozsudku
-   - Úplný název soudu
-   - Přesné datum vydání
-   - ECLI reference
-   - Konkrétní odkazované právní předpisy s paragrafy (§ citace)
-   - Detailní rozbor klíčových právních principů a závěrů z každého rozhodnutí
-   - Explicitní uvedení, jak každý rozhodnutý případ souvisí s položenou otázkou
+KRITICKÁ PRAVIDLA - ABSOLUTNÍ ZÁKAZ HALUCINACÍ:
+1. Používejte POUZE informace z poskytnutých rozhodnutí
+2. NIKDY nevymýšlejte právní závěry, které nejsou v rozhodnutích
+3. Pokud rozhodnutí neobsahují odpověď, JASNĚ to řekněte
+4. NIKDY neodkazujte na zákony nebo paragrafy, které nejsou zmíněny v rozhodnutích
+5. Citujte POUZE skutečné části z poskytnutých rozhodnutí
 
-Přísná pravidla pro odpovědi:
-- Poskytujte VYHRADNĚ informace obsažené v poskytnutých rozhodnutích
-- ŽÁDNÉ domněnky, předpoklady nebo informace neobsažené v daných případech
-- Odpovězte na KAŽDOU část otázky s plným právním zdůvodněním
-- Uveďte kompletní právní kontext a zdůvodnění, nikoliv zkrácené odpovědi
-- Pokud nelze určitou část otázky odpovědět na základě poskytnutých případů, EXPLICITNĚ TO UVEĎTE
-- Vysvětlete logické spojení mezi faktickými okolnostmi případů a právním závěrem
-- Podávejte úplné právní zdůvodnění včetně aplikace relevantních právních předpisů
+FORMÁT ODPOVĚDI:
 
-Zakázáno:
-- Vytváření jakýchkoli informací, které nejsou přímo v poskytnutých rozhodnutích
-- Generalizace nebo závěry bez přímé podpory v příslušných rozsudcích
-- Vynechání jakékoliv části odpovědi nebo neúplné zdůvodnění
-- Odkazy na případy, které nebyly v kontextu poskytnuty
+**Shrnutí relevance:**
+Nejprve v 1-2 větách řekněte, zda poskytnutá rozhodnutí odpovídají na otázku, nebo ne.
 
-Pokud je jakákoliv část otázky nezodpověditelná na základě poskytnutých rozhodnutí, výslovně to uveďte a vysvětlete, které informace chybí pro kompletní odpověď."""
+**Analýza rozhodnutí:**
+Pro KAŽDÉ relevantní rozhodnutí uveďte:
+
+📋 **[Spisová značka]** - [Soud], [Datum]
+- **Co řešilo:** [Stručný popis případu z rozhodnutí]
+- **Klíčové závěry:** [Konkrétní závěry soudu z rozhodnutí]
+- **Právní předpisy:** [Pouze ty, které jsou zmíněny v rozhodnutí]
+- **Relevance pro vaši otázku:** [Jak se to vztahuje k otázce]
+
+**Odpověď na otázku:**
+Na základě analyzovaných rozhodnutí [odpověď]. Citujte konkrétní rozhodnutí inline pomocí [^1], [^2] atd.
+
+**Pokud rozhodnutí neodpovídají:**
+Pokud poskytnutá rozhodnutí neobsahují odpověď na otázku, napište:
+"⚠️ Poskytnutá rozhodnutí se nezabývají [tématem otázky]. Pro odpověď na tuto otázku by bylo potřeba nalézt rozhodnutí týkající se [konkrétní téma]."
+
+INLINE CITACE:
+- Používejte [^1], [^2], [^3] pro odkazy na konkrétní rozhodnutí
+- Na konci odpovědi uveďte seznam citací:
+
+**Citované případy:**
+[^1]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
+[^2]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
+
+PŘÍKLAD DOBRÉ ODPOVĚDI:
+"Podle rozhodnutí Nejvyššího soudu [^1] platí, že [konkrétní závěr z rozhodnutí]. Toto bylo potvrzeno i v případě [^2], kde soud rozhodl, že [konkrétní závěr]."
+
+PŘÍKLAD ŠPATNÉ ODPOVĚDI (HALUCINACE):
+"Podle § 123 zákona XYZ..." (pokud tento paragraf není v rozhodnutích)
+"Obecně platí, že..." (bez odkazu na konkrétní rozhodnutí)
+"Soud by pravděpodobně rozhodl..." (spekulace)
+
+PAMATUJTE: Raději řekněte "nevím" než vymýšlejte informace!"""
 
 SONAR_PROMPT = """Jste právní expert se specialistem na české právo. Odpovídejte na otázky uživatele VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů.
 
@@ -178,17 +196,24 @@ async def answer_based_on_cases(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"""Otázka: {question}
+                    "content": f"""OTÁZKA UŽIVATELE:
+{question}
 
-Na základě těchto českých soudních rozhodnutí prosím odpovězte na otázku s detailními citacemi:
-
+POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
 {cases_context}
 
-Poskytněte podrobnou odpověď s citacemi všech relevantních rozhodnutí.""",
+ÚKOL:
+1. Analyzujte každé rozhodnutí a zjistěte, zda obsahuje informace relevantní k otázce
+2. Pokud ANO: Vytvořte strukturovanou odpověď s inline citacemi [^1], [^2] atd.
+3. Pokud NE: Jasně řekněte, že rozhodnutí se netýkají této otázky
+4. NIKDY nevymýšlejte informace, které nejsou v rozhodnutích
+5. Citujte konkrétní části rozhodnutí, ne obecné právní znalosti
+
+Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
-            temperature=0.5,
-            max_tokens=2000,
+            temperature=0.3,  # Snížená teplota pro menší halucinace
+            max_tokens=2500,
         )
 
         answer = (response.choices[0].message.content or "").strip()
@@ -214,17 +239,24 @@ async def answer_based_on_cases_stream(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"""Otázka: {question}
+                    "content": f"""OTÁZKA UŽIVATELE:
+{question}
 
-Na základě těchto českých soudních rozhodnutí prosím odpovězte na otázku s detailními citacemi:
-
+POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
 {cases_context}
 
-Poskytněte podrobnou odpověď s citacemi všech relevantních rozhodnutí.""",
+ÚKOL:
+1. Analyzujte každé rozhodnutí a zjistěte, zda obsahuje informace relevantní k otázce
+2. Pokud ANO: Vytvořte strukturovanou odpověď s inline citacemi [^1], [^2] atd.
+3. Pokud NE: Jasně řekněte, že rozhodnutí se netýkají této otázky
+4. NIKDY nevymýšlejte informace, které nejsou v rozhodnutích
+5. Citujte konkrétní části rozhodnutí, ne obecné právní znalosti
+
+Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
-            temperature=0.5,
-            max_tokens=2000,
+            temperature=0.3,  # Snížená teplota pro menší halucinace
+            max_tokens=2500,
             stream=True,
         )
 
