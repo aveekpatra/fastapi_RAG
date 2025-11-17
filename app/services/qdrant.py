@@ -226,14 +226,13 @@ async def _get_cases_improved_rag(
     openai_client: OpenAI = None
 ) -> list[CaseResult]:
     """
-    Improved RAG pipeline with query generation and hybrid search
+    Improved RAG pipeline with query generation and vector search
     
     Steps:
     1. Generate 2-3 optimized search queries from the user question
-    2. Perform hybrid search (vector + BM25) for each query
+    2. Perform vector search for each query
     3. Merge and deduplicate results
-    4. Rerank top 10-15 results
-    5. Return final top K results
+    4. Return final top K results
     
     Args:
         question: User's question
@@ -255,28 +254,62 @@ async def _get_cases_improved_rag(
             num_queries=settings.NUM_GENERATED_QUERIES
         )
         
-        # Step 2 & 3: Multi-query hybrid search with merging
-        merged_cases = await multi_query_hybrid_search(
-            queries,
-            results_per_query=settings.RESULTS_PER_QUERY
-        )
+        print(f"Generated {len(queries)} search queries")
         
-        if not merged_cases:
-            print("No cases found with improved RAG pipeline")
-            return []
+        # Step 2: Perform vector search for each query
+        search_tasks = []
+        for query in queries:
+            search_tasks.append(_get_cases_basic(query, settings.RESULTS_PER_QUERY))
         
-        # Step 4: Rerank (currently simple, can be enhanced with cross-encoder)
-        # Take top 10-15 for reranking
-        candidates_for_reranking = merged_cases[:15]
+        all_results = await asyncio.gather(*search_tasks)
         
-        # Step 5: Return final top K
-        final_cases = simple_rerank(candidates_for_reranking, top_k)
+        # Step 3: Merge and deduplicate results
+        case_scores = {}
+        
+        for query_results in all_results:
+            for case in query_results:
+                case_id = case.case_number
+                
+                if case_id not in case_scores:
+                    case_scores[case_id] = {
+                        'case': case,
+                        'max_score': case.relevance_score,
+                        'total_score': case.relevance_score,
+                        'count': 1
+                    }
+                else:
+                    # Update scores
+                    case_scores[case_id]['max_score'] = max(
+                        case_scores[case_id]['max_score'],
+                        case.relevance_score
+                    )
+                    case_scores[case_id]['total_score'] += case.relevance_score
+                    case_scores[case_id]['count'] += 1
+        
+        # Convert to list and sort by aggregated score
+        merged_cases = []
+        for case_id, data in case_scores.items():
+            case = data['case']
+            # Weighted score: average score * sqrt(frequency)
+            weighted_score = (data['total_score'] / data['count']) * (data['count'] ** 0.5)
+            case.relevance_score = weighted_score
+            merged_cases.append(case)
+        
+        # Sort by weighted score
+        merged_cases.sort(key=lambda x: x.relevance_score, reverse=True)
+        
+        print(f"Merged {len(merged_cases)} unique cases from {len(queries)} queries")
+        
+        # Return top K
+        final_cases = merged_cases[:top_k]
         
         print(f"Improved RAG pipeline returned {len(final_cases)} cases")
         return final_cases
         
     except Exception as e:
         print(f"Error in improved RAG pipeline: {str(e)}")
+        import traceback
+        traceback.print_exc()
         print("Falling back to basic search")
         # Fallback to basic search
         return await _get_cases_basic(question, top_k)
