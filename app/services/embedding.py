@@ -1,7 +1,7 @@
 from typing import Optional
 from sentence_transformers import SentenceTransformer
 
-# Initialize the embedding model globally
+# Initialize the embedding model globally - MUST match the model used for indexing
 embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
@@ -9,6 +9,9 @@ async def get_embedding(text: str) -> Optional[list[float]]:
     """
     Get embedding using sentence transformers (paraphrase-multilingual-MiniLM-L12-v2)
     Must match the model used for Qdrant storage
+    
+    IMPORTANT: This model MUST be the same as used during data indexing
+    Current model: paraphrase-multilingual-MiniLM-L12-v2 (384 dimensions)
     """
     try:
         embedding = embedding_model.encode(text).tolist()

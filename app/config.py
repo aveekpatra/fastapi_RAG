@@ -31,9 +31,14 @@ class Settings:
 
     # Improved RAG pipeline configuration
     USE_IMPROVED_RAG: bool = os.getenv("USE_IMPROVED_RAG", "True").lower() == "true"
-    NUM_GENERATED_QUERIES: int = int(os.getenv("NUM_GENERATED_QUERIES", "3"))
+    NUM_GENERATED_QUERIES: int = int(os.getenv("NUM_GENERATED_QUERIES", "2"))  # Reduced to 2 for better quality
     RESULTS_PER_QUERY: int = int(os.getenv("RESULTS_PER_QUERY", "10"))
     FINAL_TOP_K: int = int(os.getenv("FINAL_TOP_K", "5"))
+    
+    # Hybrid search configuration
+    HYBRID_DENSE_WEIGHT: float = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.7"))  # Semantic similarity weight
+    HYBRID_SPARSE_WEIGHT: float = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.3"))  # Keyword matching weight
+    USE_RRF_FUSION: bool = os.getenv("USE_RRF_FUSION", "True").lower() == "true"  # Reciprocal Rank Fusion
 
     @property
     def qdrant_protocol(self) -> str:

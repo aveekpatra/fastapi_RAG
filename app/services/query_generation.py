@@ -1,28 +1,44 @@
 """
 Query Generation Service
 Generates multiple optimized search queries from a user question using LLM
+IMPORTANT: Maintains original meaning while expanding search coverage
 """
 from openai import OpenAI
 from app.config import settings
 
-QUERY_GENERATION_PROMPT = """Jste expert na generování vyhledávacích dotazů pro právní databáze. Vaším úkolem je vzít uživatelskou otázku a vygenerovat 2-3 optimalizované vyhledávací dotazy, které pomohou najít relevantní právní případy.
+QUERY_GENERATION_PROMPT = """Jste expert na generování vyhledávacích dotazů pro právní databáze českých soudních rozhodnutí.
 
-Pravidla pro generování dotazů:
-1. Každý dotaz by měl zachytit jiný aspekt nebo perspektivu původní otázky
-2. Používejte právní terminologii a klíčová slova
-3. Buďte konkrétní a zaměřený - vyhněte se příliš obecným dotazům
-4. Zahrňte relevantní právní pojmy, paragrafy nebo oblasti práva
-5. Dotazy by měly být v češtině
-6. Každý dotaz by měl být na samostatném řádku
-7. Nepoužívejte číslování nebo odrážky - pouze čisté dotazy
+KRITICKÁ PRAVIDLA (MUSÍ BÝT DODRŽENA):
+1. ZACHOVEJTE PŮVODNÍ VÝZNAM - dotazy musí hledat odpověď na STEJNOU otázku
+2. Každý dotaz musí obsahovat KLÍČOVÉ PRÁVNÍ POJMY z původní otázky
+3. Neměňte právní kontext ani oblast práva
+4. Dotazy by měly být KRATŠÍ než původní otázka (max 8 slov)
+5. Používejte konkrétní právní terminologii, ne obecné fráze
+6. Každý dotaz zachycuje JINÝ ASPEKT téže otázky
+7. Dotazy v češtině, jeden na řádek, BEZ číslování
 
-Příklad:
-Uživatelská otázka: "Může zaměstnavatel propustit zaměstnance bez udání důvodu?"
+ŠPATNÉ PŘÍKLADY (NEPOUŽÍVAT):
+❌ "práva zaměstnanců" (příliš obecné)
+❌ "co říká zákon" (příliš vágní)
+❌ "soudní rozhodnutí" (nemá kontext)
+❌ Dotazy měnící téma nebo právní oblast
 
-Vygenerované dotazy:
-výpověď bez udání důvodu pracovní právo
-okamžité zrušení pracovního poměru zaměstnavatelem
-ochrana zaměstnance před neodůvodněným propuštěním
+DOBRÉ PŘÍKLADY:
+✅ Původní: "Může zaměstnavatel propustit zaměstnance bez udání důvodu?"
+   Dotaz 1: výpověď bez udání důvodu §52 zákoník práce
+   Dotaz 2: okamžité zrušení pracovního poměru zaměstnavatelem
+   Dotaz 3: ochranná doba zaměstnance výpověď
+
+✅ Původní: "Jaké jsou podmínky pro rozvod manželství?"
+   Dotaz 1: rozvod manželství podmínky §755 občanský zákoník
+   Dotaz 2: rozpad manželství soudní řízení
+   Dotaz 3: rozvod bez souhlasu druhého manžela
+
+POSTUP:
+1. Identifikujte HLAVNÍ PRÁVNÍ OTÁZKU
+2. Extrahujte KLÍČOVÉ PRÁVNÍ POJMY
+3. Vytvořte 2-3 dotazy s různými formulacemi STEJNÉ otázky
+4. Každý dotaz musí být RELEVANTNÍ k původnímu záměru
 
 Nyní vygenerujte 2-3 optimalizované vyhledávací dotazy pro následující otázku:"""
 
@@ -30,6 +46,7 @@ Nyní vygenerujte 2-3 optimalizované vyhledávací dotazy pro následující ot
 async def generate_search_queries(question: str, client: OpenAI, num_queries: int = 3) -> list[str]:
     """
     Generate multiple optimized search queries from a user question
+    MAINTAINS ORIGINAL MEANING while expanding search coverage
     
     Args:
         question: Original user question
@@ -37,7 +54,7 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
         num_queries: Number of queries to generate (default: 3)
     
     Returns:
-        List of generated search queries
+        List of generated search queries that maintain original intent
     """
     try:
         response = client.chat.completions.create(
@@ -46,7 +63,7 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
                 {"role": "system", "content": QUERY_GENERATION_PROMPT},
                 {"role": "user", "content": question}
             ],
-            temperature=0.7,  # Slightly higher for diversity
+            temperature=0.5,  # Lower temperature for more focused, relevant queries
             max_tokens=300,
         )
         
@@ -56,24 +73,36 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
         queries = [
             q.strip() 
             for q in generated_text.split('\n') 
-            if q.strip() and not q.strip().startswith(('1.', '2.', '3.', '-', '*'))
+            if q.strip() and not q.strip().startswith(('1.', '2.', '3.', '-', '*', '✅', '❌'))
         ]
         
         # Limit to requested number of queries
         queries = queries[:num_queries]
         
-        # Fallback to original question if generation fails
-        if not queries:
-            print("Warning: Query generation failed, using original question")
-            queries = [question]
+        # Validate queries - ensure they're not too short or too long
+        validated_queries = []
+        for q in queries:
+            word_count = len(q.split())
+            if 2 <= word_count <= 12:  # Reasonable length
+                validated_queries.append(q)
         
-        print(f"Generated {len(queries)} search queries:")
-        for i, q in enumerate(queries, 1):
-            print(f"  {i}. {q}")
+        # If validation removed all queries, use original
+        if not validated_queries:
+            print("⚠️ Warning: Query validation failed, using original question")
+            validated_queries = [question]
         
-        return queries
+        # Always include original question as first query for safety
+        final_queries = [question] + [q for q in validated_queries if q != question]
+        final_queries = final_queries[:num_queries + 1]  # Original + generated
+        
+        print(f"✅ Generated {len(final_queries)} search queries (including original):")
+        for i, q in enumerate(final_queries, 1):
+            marker = "📌 ORIGINAL" if i == 1 else f"🔍 VARIANT {i-1}"
+            print(f"  {marker}: {q}")
+        
+        return final_queries
         
     except Exception as e:
-        print(f"Error generating queries: {str(e)}")
+        print(f"❌ Error generating queries: {str(e)}")
         # Fallback to original question
         return [question]

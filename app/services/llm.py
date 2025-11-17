@@ -185,10 +185,21 @@ async def answer_based_on_cases(
     question: str, cases: list[CaseResult], client: OpenAI
 ) -> str:
     """
-    GPT-4o answers the question based on all case data with citations
+    GPT-4o answers the question based on FULL case data with citations
+    NO TRUNCATION - All context is passed to GPT
     """
     try:
+        # Format cases with FULL context - NO TRUNCATION
         cases_context = format_cases_for_context(cases)
+        
+        print(f"\n{'='*80}")
+        print(f"📤 PASSING FULL CONTEXT TO GPT")
+        print(f"{'='*80}")
+        print(f"Number of cases: {len(cases)}")
+        print(f"Context length: {len(cases_context)} characters")
+        print(f"Context length: {len(cases_context.split())} words")
+        print(f"Estimated tokens: ~{len(cases_context) // 4}")
+        print(f"{'='*80}\n")
 
         response = client.chat.completions.create(
             model="openai/gpt-4o-mini",
@@ -199,7 +210,7 @@ async def answer_based_on_cases(
                     "content": f"""OTÁZKA UŽIVATELE:
 {question}
 
-POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
+POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
 {cases_context}
 
 ÚKOL:
@@ -209,18 +220,24 @@ POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
 4. NIKDY nevymýšlejte informace, které nejsou v rozhodnutích
 5. Citujte konkrétní části rozhodnutí, ne obecné právní znalosti
 
+DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
 Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
             temperature=0.3,  # Snížená teplota pro menší halucinace
-            max_tokens=2500,
+            max_tokens=4000,  # Increased for longer, more detailed responses
         )
 
         answer = (response.choices[0].message.content or "").strip()
+        
+        print(f"✅ GPT response generated: {len(answer)} characters\n")
+        
         return answer
 
     except Exception as e:
-        print(f"Chyba pri generovani odpovedi zalozene na pripadech: {str(e)}")
+        print(f"❌ Chyba pri generovani odpovedi zalozene na pripadech: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 
@@ -228,12 +245,21 @@ async def answer_based_on_cases_stream(
     question: str, cases: list[CaseResult], client: OpenAI
 ):
     """
-    Stream GPT-4o answer based on cases
+    Stream GPT-4o answer based on FULL case data - NO TRUNCATION
     """
     try:
-        print(f"📝 Formatting {len(cases)} cases for context...")
+        print(f"\n{'='*80}")
+        print(f"📤 STREAMING FULL CONTEXT TO GPT")
+        print(f"{'='*80}")
+        print(f"Number of cases: {len(cases)}")
+        
+        # Format cases with FULL context - NO TRUNCATION
         cases_context = format_cases_for_context(cases)
-        print(f"📝 Context length: {len(cases_context)} characters")
+        
+        print(f"Context length: {len(cases_context)} characters")
+        print(f"Context length: {len(cases_context.split())} words")
+        print(f"Estimated tokens: ~{len(cases_context) // 4}")
+        print(f"{'='*80}\n")
 
         print(f"🤖 Starting OpenAI streaming...")
         stream = client.chat.completions.create(
@@ -245,7 +271,7 @@ async def answer_based_on_cases_stream(
                     "content": f"""OTÁZKA UŽIVATELE:
 {question}
 
-POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
+POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
 {cases_context}
 
 ÚKOL:
@@ -255,11 +281,12 @@ POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ:
 4. NIKDY nevymýšlejte informace, které nejsou v rozhodnutích
 5. Citujte konkrétní části rozhodnutí, ne obecné právní znalosti
 
+DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
 Začněte analýzou relevance rozhodnutí.""",
                 },
             ],
             temperature=0.3,  # Snížená teplota pro menší halucinace
-            max_tokens=2500,
+            max_tokens=4000,  # Increased for longer, more detailed responses
             stream=True,
         )
 
@@ -278,7 +305,6 @@ Začněte analýzou relevance rozhodnutí.""",
     except Exception as e:
         print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
         import traceback
-        traceback.print_exc()
         traceback.print_exc()
 
 

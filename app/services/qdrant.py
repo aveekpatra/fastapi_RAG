@@ -225,13 +225,13 @@ async def _get_cases_improved_rag(
     openai_client: OpenAI = None
 ) -> list[CaseResult]:
     """
-    Improved RAG pipeline with query generation and vector search
+    Improved RAG pipeline with query generation and HYBRID search
     
     Steps:
-    1. Generate 2-3 optimized search queries from the user question
-    2. Perform vector search for each query
-    3. Merge and deduplicate results
-    4. Return final top K results
+    1. Generate 2-3 optimized search queries that MAINTAIN ORIGINAL MEANING
+    2. Perform HYBRID search (dense + sparse vectors) for each query
+    3. Merge using Reciprocal Rank Fusion (RRF)
+    4. Return final top K results with FULL CONTEXT (no truncation)
     
     Args:
         question: User's question
@@ -239,10 +239,14 @@ async def _get_cases_improved_rag(
         openai_client: OpenAI client for query generation
     
     Returns:
-        List of CaseResult objects
+        List of CaseResult objects with complete information
     """
     try:
-        # Step 1: Generate search queries
+        print(f"\n{'='*80}")
+        print(f"🚀 IMPROVED RAG PIPELINE WITH HYBRID SEARCH")
+        print(f"{'='*80}")
+        
+        # Step 1: Generate search queries that maintain original meaning
         if openai_client is None:
             from app.services.llm import get_openai_client
             openai_client = get_openai_client()
@@ -253,62 +257,28 @@ async def _get_cases_improved_rag(
             num_queries=settings.NUM_GENERATED_QUERIES
         )
         
-        print(f"Generated {len(queries)} search queries")
+        print(f"\n📝 Generated {len(queries)} queries (including original)")
         
-        # Step 2: Perform vector search for each query
-        search_tasks = []
-        for query in queries:
-            search_tasks.append(_get_cases_basic(query, settings.RESULTS_PER_QUERY))
+        # Step 2: Perform HYBRID search for each query
+        from app.services.hybrid_search_v2 import hybrid_search_engine
         
-        all_results = await asyncio.gather(*search_tasks)
+        final_cases = await hybrid_search_engine.multi_query_hybrid_search(
+            queries=queries,
+            results_per_query=settings.RESULTS_PER_QUERY,
+            final_limit=top_k,
+            dense_weight=0.7,  # 70% semantic similarity
+            sparse_weight=0.3   # 30% keyword matching
+        )
         
-        # Step 3: Merge and deduplicate results
-        case_scores = {}
+        print(f"\n✅ Improved RAG pipeline returned {len(final_cases)} cases")
+        print(f"   All cases include FULL CONTEXT (no truncation)")
         
-        for query_results in all_results:
-            for case in query_results:
-                case_id = case.case_number
-                
-                if case_id not in case_scores:
-                    case_scores[case_id] = {
-                        'case': case,
-                        'max_score': case.relevance_score,
-                        'total_score': case.relevance_score,
-                        'count': 1
-                    }
-                else:
-                    # Update scores
-                    case_scores[case_id]['max_score'] = max(
-                        case_scores[case_id]['max_score'],
-                        case.relevance_score
-                    )
-                    case_scores[case_id]['total_score'] += case.relevance_score
-                    case_scores[case_id]['count'] += 1
-        
-        # Convert to list and sort by aggregated score
-        merged_cases = []
-        for case_id, data in case_scores.items():
-            case = data['case']
-            # Weighted score: average score * sqrt(frequency)
-            weighted_score = (data['total_score'] / data['count']) * (data['count'] ** 0.5)
-            case.relevance_score = weighted_score
-            merged_cases.append(case)
-        
-        # Sort by weighted score
-        merged_cases.sort(key=lambda x: x.relevance_score, reverse=True)
-        
-        print(f"Merged {len(merged_cases)} unique cases from {len(queries)} queries")
-        
-        # Return top K
-        final_cases = merged_cases[:top_k]
-        
-        print(f"Improved RAG pipeline returned {len(final_cases)} cases")
         return final_cases
         
     except Exception as e:
-        print(f"Error in improved RAG pipeline: {str(e)}")
+        print(f"\n❌ Error in improved RAG pipeline: {str(e)}")
         import traceback
         traceback.print_exc()
-        print("Falling back to basic search")
+        print("\n⚠️ Falling back to basic search")
         # Fallback to basic search
         return await _get_cases_basic(question, top_k)
