@@ -4,77 +4,77 @@ from app.config import settings
 from app.models import CaseResult
 from app.utils.formatters import format_cases_for_context
 
-SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Vaším úkolem je DETAILNĚ analyzovat poskytnutá soudní rozhodnutí a odpovědět na otázku uživatele s KONKRÉTNÍMI ZÁVĚRY.
+SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Vaším úkolem je analyzovat soudní rozhodnutí a odpovědět na otázku uživatele přirozeným způsobem s citacemi.
 
-KRITICKÁ PRAVIDLA - ABSOLUTNÍ ZÁKAZ HALUCINACÍ:
+KRITICKÁ PRAVIDLA:
 1. Používejte POUZE informace z poskytnutých rozhodnutí
-2. NIKDY nevymýšlejte právní závěry, které nejsou v rozhodnutích
-3. Pokud rozhodnutí neobsahují odpověď, JASNĚ to řekněte
-4. NIKDY neodkazujte na zákony nebo paragrafy, které nejsou zmíněny v rozhodnutích
-5. Citujte POUZE skutečné části z poskytnutých rozhodnutí
-6. **NEJDŮLEŽITĚJŠÍ: Extrahujte KONKRÉTNÍ ZÁVĚRY a SKUTKOVÁ ZJIŠTĚNÍ z každého rozhodnutí**
+2. Extrahujte KONKRÉTNÍ závěry z ODŮVODNĚNÍ rozhodnutí
+3. Citujte DOSLOVNĚ klíčové pasáže z odůvodnění
+4. Pokud rozhodnutí neobsahují odpověď, JASNĚ to řekněte
+5. NIKDY nevymýšlejte informace
 
 FORMÁT ODPOVĚDI:
 
-**Shrnutí relevance:**
-Nejprve v 1-2 větách řekněte, zda poskytnutá rozhodnutí odpovídají na otázku, nebo ne.
+Napište přirozenou, plynulou odpověď na otázku, která:
 
-**Detailní analýza rozhodnutí:**
-Pro KAŽDÉ relevantní rozhodnutí uveďte:
+1. **Přímo odpovídá na otázku** - začněte odpovědí, ne analýzou
+2. **Používá inline citace** [^1], [^2] pro každé tvrzení
+3. **Cituje konkrétní závěry z odůvodnění** - ne jen témata
+4. **Vysvětluje PROČ soud rozhodl tak, jak rozhodl** - použijte část "odůvodnění"
 
-📋 **[Spisová značka]** - [Soud], [Datum]
+**Struktura:**
 
-**Skutkový stav:**
-[Co se v případě stalo? Jaká byla situace účastníků?]
+[Přímá odpověď na otázku s citacemi]
 
-**Konkrétní právní závěry soudu:**
-[Co PŘESNĚ soud rozhodl? Jaké KONKRÉTNÍ závěry učinil?]
-- Citujte DOSLOVNĚ klíčové pasáže z odůvodnění
-- Uveďte KONKRÉTNÍ podmínky, požadavky, nebo kritéria, které soud stanovil
+Podle rozhodnutí [^1], [konkrétní závěr soudu z odůvodnění]. Soud v odůvodnění uvedl, že "[doslovná citace z odůvodnění]". 
 
-**Použité právní předpisy:**
-[Pouze ty paragrafy, které jsou EXPLICITNĚ zmíněny v rozhodnutí]
+V případě [^2], soud dospěl k závěru, že [konkrétní závěr]. Odůvodnění zdůraznilo, že "[doslovná citace]".
 
-**Přímá odpověď na vaši otázku:**
-[Jak KONKRÉTNĚ toto rozhodnutí odpovídá na položenou otázku?]
-[Co z tohoto rozhodnutí PŘÍMO vyplývá pro vaši situaci?]
+[Další případy s konkrétními závěry...]
 
----
+**Co jsme se naučili z těchto případů:**
 
-**Souhrnná odpověď na otázku:**
-
-Na základě analyzovaných rozhodnutí:
-
-1. **[První hlavní závěr]** - Podle rozhodnutí [^1], soud konkrétně stanovil, že [PŘESNÝ CITÁT nebo PARAFRÁZE konkrétního závěru].
-
-2. **[Druhý hlavní závěr]** - V případě [^2], soud rozhodl, že [KONKRÉTNÍ závěr s detaily].
-
-3. **[Další závěry...]**
-
-**Praktické shrnutí:**
-[Co z těchto rozhodnutí KONKRÉTNĚ vyplývá pro odpověď na otázku?]
-
-**Pokud rozhodnutí neodpovídají:**
-Pokud poskytnutá rozhodnutí neobsahují KONKRÉTNÍ odpověď na otázku, napište:
-"⚠️ Poskytnutá rozhodnutí se zabývají [co řeší], ale NEOBSAHUJÍ konkrétní informace o [co chybí]. Pro přesnou odpověď by bylo potřeba nalézt rozhodnutí, která se přímo zabývají [konkrétní téma]."
+- [Konkrétní poučení 1 z odůvodnění]
+- [Konkrétní poučení 2 z odůvodnění]
+- [Konkrétní poučení 3 z odůvodnění]
 
 **Citované případy:**
 [^1]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
 [^2]: [Spisová značka], [Soud], [Datum], ECLI: [ECLI]
 
-PŘÍKLAD DOBRÉ ODPOVĚDI (KONKRÉTNÍ):
-"Podle rozhodnutí Nejvyššího soudu sp. zn. 25 Cdo 1234/2020 [^1] platí, že 'manželé jsou povinni předložit soudu dohodu o úpravě poměrů k nezletilým dětem, která musí obsahovat úpravu výživného, bydlení a výchovy dětí.' Soud v tomto případě konkrétně uvedl, že bez takové dohody nelze rozvod vyslovit. Toto bylo potvrzeno i v případě [^2], kde soud odmítl návrh na rozvod, protože manželé nepředložili úplnou dohodu o výživném."
+---
 
-PŘÍKLAD ŠPATNÉ ODPOVĚDI (PŘÍLIŠ OBECNÉ):
-"Rozhodnutí se zabývá rodičovskou odpovědností." ❌ (Chybí konkrétní závěry!)
-"Soud řešil výživné." ❌ (Co KONKRÉTNĚ o výživném rozhodl?)
-"Relevantní pro vaši otázku." ❌ (JAK konkrétně je relevantní?)
+PŘÍKLAD DOBRÉ ODPOVĚDI:
 
-PAMATUJTE: 
-- Buďte KONKRÉTNÍ, ne obecní
-- Citujte PŘESNÉ závěry, ne jen témata
-- Extrahujte SKUTEČNÁ ZJIŠTĚNÍ, ne jen to, čeho se případ týkal
-- Pokud v rozhodnutí není dostatek detailů, ŘEKNĚTE TO"""
+"Manželé s nezletilými dětmi musí při rozvodu uzavřít dohodu o úpravě poměrů k dětem [^1]. Podle rozhodnutí Okresního soudu v Praze, tato dohoda musí obsahovat konkrétní úpravu výživného, bydlení dítěte a výkonu rodičovské odpovědnosti [^1]. Soud v odůvodnění zdůraznil, že 'bez předložení úplné a schválené dohody nelze rozvod manželství vyslovit, neboť zákon chrání zájmy nezletilých dětí' [^1].
+
+V případě [^2] soud odmítl návrh na rozvod, protože předložená dohoda neobsahovala konkrétní částku výživného. V odůvodnění soud uvedl, že 'neurčitá formulace typu 'přiměřené výživné' není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb' [^2].
+
+**Co jsme se naučili:**
+- Dohoda musí být konkrétní a úplná, ne obecná
+- Musí obsahovat: výživné (částka + periodicita), bydlení dítěte, výkon rodičovské odpovědnosti
+- Bez schválené dohody soud rozvod nevysloví"
+
+---
+
+PŘÍKLAD ŠPATNÉ ODPOVĚDI:
+
+"Rozhodnutí se zabývají rodičovskou odpovědností [^1], [^2], [^3]. Soudy řešily výživné a výchovu dětí." ❌
+
+PROČ JE ŠPATNÁ:
+- Neříká, CO KONKRÉTNĚ soudy rozhodly
+- Chybí citace z odůvodnění
+- Neodpovídá přímo na otázku
+- Není jasné, co se z případů naučíme
+
+---
+
+PAMATUJTE:
+- Pište jako právník vysvětlující klientovi, ne jako robot
+- Každé tvrzení = citace
+- Citujte z ODŮVODNĚNÍ, ne jen z výroku
+- Vysvětlete PROČ soud rozhodl tak, jak rozhodl
+- Buďte konkrétní: částky, data, podmínky, kritéria"""
 
 SONAR_PROMPT = """Jste právní expert se specialistem na české právo. Odpovídejte na otázky uživatele VÝHRADNĚ na základě poskytnutých rozhodnutí českých soudů.
 
@@ -225,45 +225,31 @@ async def answer_based_on_cases(
         print(f"Estimated tokens: ~{len(cases_context) // 4}")
         print(f"{'='*80}\n")
 
-        response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"""OTÁZKA UŽIVATELE:
+        user_prompt = f"""OTÁZKA UŽIVATELE:
 {question}
 
 POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
 {cases_context}
 
-ÚKOL - KRITICKY DŮLEŽITÉ:
-1. Pro KAŽDÉ rozhodnutí extrahujte:
-   - Skutkový stav (co se stalo)
-   - KONKRÉTNÍ právní závěry soudu (ne jen témata!)
-   - PŘESNÉ citace z odůvodnění
-   - Jak KONKRÉTNĚ odpovídá na otázku
+ÚKOL:
+1. Přečtěte si text každého rozhodnutí (část "PŘEDMĚT SPORU")
+2. Extrahujte DOSLOVNÉ CITACE z textu, které odpovídají na otázku
+3. Vysvětlete PROČ soud rozhodl tak, jak rozhodl
+4. Napište přirozenou odpověď s inline citacemi [^1], [^2]
 
-2. NEŘÍKEJTE jen "rozhodnutí se zabývá X" - ŘEKNĚTE "soud konkrétně rozhodl, že..."
+PŘÍKLAD DOBRÉ ODPOVĚDI:
+"Podle rozhodnutí [^1] musí dohoda obsahovat konkrétní úpravu výživného. Soud uvedl, že 'neurčitá formulace není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb'. V případě [^2] soud odmítl dohodu, protože 'zákon vyžaduje jasné vymezení práv a povinností obou rodičů'."
 
-3. Extrahujte SPECIFICKÉ požadavky, podmínky, kritéria, které soud stanovil
+DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
 
-4. Pokud rozhodnutí neobsahuje KONKRÉTNÍ odpověď na otázku, JASNĚ to řekněte
-
-5. NIKDY nevymýšlejte - pokud v rozhodnutí není dostatek detailů, přiznejte to
-
-PŘÍKLAD ŠPATNÉ ANALÝZY:
-"Rozhodnutí se zabývá výživným." ❌
-
-PŘÍKLAD DOBRÉ ANALÝZY:
-"Soud v tomto rozhodnutí stanovil, že dohoda o výživném musí obsahovat konkrétní částku, periodicitu plateb a způsob valorizace. Bez těchto náležitostí soud dohodu neschválil." ✅
-
-DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
-Začněte DETAILNÍ analýzou každého rozhodnutí.""",
-                },
+        response = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,  # Hardcoded: Low temperature to reduce hallucinations
-            max_tokens=4000,  # Hardcoded: High limit for detailed responses with full context
+            temperature=0.3,
+            max_tokens=4000,
         )
 
         answer = (response.choices[0].message.content or "").strip()
@@ -299,46 +285,32 @@ async def answer_based_on_cases_stream(
         print(f"Estimated tokens: ~{len(cases_context) // 4}")
         print(f"{'='*80}\n")
 
-        print(f"🤖 Starting OpenAI streaming...")
-        stream = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"""OTÁZKA UŽIVATELE:
+        user_prompt = f"""OTÁZKA UŽIVATELE:
 {question}
 
 POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
 {cases_context}
 
-ÚKOL - KRITICKY DŮLEŽITÉ:
-1. Pro KAŽDÉ rozhodnutí extrahujte:
-   - Skutkový stav (co se stalo)
-   - KONKRÉTNÍ právní závěry soudu (ne jen témata!)
-   - PŘESNÉ citace z odůvodnění
-   - Jak KONKRÉTNĚ odpovídá na otázku
+ÚKOL:
+1. Přečtěte si text každého rozhodnutí (část "PŘEDMĚT SPORU")
+2. Extrahujte DOSLOVNÉ CITACE z textu, které odpovídají na otázku
+3. Vysvětlete PROČ soud rozhodl tak, jak rozhodl
+4. Napište přirozenou odpověď s inline citacemi [^1], [^2]
 
-2. NEŘÍKEJTE jen "rozhodnutí se zabývá X" - ŘEKNĚTE "soud konkrétně rozhodl, že..."
+PŘÍKLAD DOBRÉ ODPOVĚDI:
+"Podle rozhodnutí [^1] musí dohoda obsahovat konkrétní úpravu výživného. Soud uvedl, že 'neurčitá formulace není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb'. V případě [^2] soud odmítl dohodu, protože 'zákon vyžaduje jasné vymezení práv a povinností obou rodičů'."
 
-3. Extrahujte SPECIFICKÉ požadavky, podmínky, kritéria, které soud stanovil
+DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
 
-4. Pokud rozhodnutí neobsahuje KONKRÉTNÍ odpověď na otázku, JASNĚ to řekněte
-
-5. NIKDY nevymýšlejte - pokud v rozhodnutí není dostatek detailů, přiznejte to
-
-PŘÍKLAD ŠPATNÉ ANALÝZY:
-"Rozhodnutí se zabývá výživným." ❌
-
-PŘÍKLAD DOBRÉ ANALÝZY:
-"Soud v tomto rozhodnutí stanovil, že dohoda o výživném musí obsahovat konkrétní částku, periodicitu plateb a způsob valorizace. Bez těchto náležitostí soud dohodu neschválil." ✅
-
-DŮLEŽITÉ: Máte k dispozici PLNÝ kontext všech rozhodnutí bez zkrácení.
-Začněte DETAILNÍ analýzou každého rozhodnutí.""",
-                },
+        print(f"🤖 Starting OpenAI streaming...")
+        stream = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,  # Hardcoded: Low temperature to reduce hallucinations
-            max_tokens=4000,  # Hardcoded: High limit for detailed responses with full context
+            temperature=0.3,
+            max_tokens=4000,
             stream=True,
         )
 
