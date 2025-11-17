@@ -55,15 +55,24 @@ async def _get_cases_basic(question: str, top_k: int) -> list[CaseResult]:
     initial_timeout = settings.QDRANT_INITIAL_TIMEOUT
 
     try:
+        print(f"=== QDRANT DEBUG ===")
+        print(f"Question: {question}")
+        print(f"Qdrant URL: {settings.qdrant_url}")
+        print(f"Collection: {settings.QDRANT_COLLECTION}")
+        print(f"Top K: {top_k}")
+        
         vector = await get_embedding(question)
 
         if vector is None:
             print("Chyba: Nepodařilo se vygenerovat vektorové vyjádření")
             return []
 
+        print(f"Vector generated successfully, length: {len(vector)}")
+
         headers = (
             {"api-key": settings.QDRANT_API_KEY} if settings.QDRANT_API_KEY else {}
         )
+        print(f"Headers: {list(headers.keys())}")
 
         for attempt in range(max_retries):
             try:
@@ -88,11 +97,18 @@ async def _get_cases_basic(question: str, top_k: int) -> list[CaseResult]:
 
                     if response.status_code == 200:
                         results = response.json()
-                        print(f"Nalezeno {len(results.get('result', []))} případů")
+                        result_list = results.get('result', [])
+                        print(f"✅ SUCCESS: Nalezeno {len(result_list)} případů")
+                        
+                        if len(result_list) == 0:
+                            print("⚠️ WARNING: Qdrant returned 0 results!")
+                            print(f"Full response: {results}")
 
                         cases = []
-                        for result in results.get("result", []):
+                        for result in result_list:
                             payload = result.get("payload", {})
+                            score = result.get("score", 0.0)
+                            print(f"  - Case: {payload.get('case_number', 'N/A')} (score: {score})")
                             cases.append(
                                 CaseResult(
                                     case_number=payload.get("case_number", "N/A"),
