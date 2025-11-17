@@ -130,8 +130,8 @@ async def case_search(
 
 @router.get("/case-search-stream")
 async def case_search_stream(
-    question: str = Query(..., description="Legal question to search"),
-    top_k: int = Query(5, description="Number of cases to retrieve"),
+    question: str = Query(..., description="Legal question to search", min_length=3, max_length=1000),
+    top_k: int = Query(5, description="Number of cases to retrieve", ge=1, le=20),
     use_improved_rag: bool = Query(
         None, 
         description="Use improved RAG pipeline (query generation + hybrid search)"

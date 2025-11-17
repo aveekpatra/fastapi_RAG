@@ -7,7 +7,6 @@ from app.config import settings
 from app.models import CaseResult
 from app.services.embedding import get_embedding
 from app.services.query_generation import generate_search_queries
-from app.services.hybrid_search import multi_query_hybrid_search, simple_rerank
 
 
 async def get_cases_from_qdrant(

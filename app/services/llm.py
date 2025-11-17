@@ -279,3 +279,4 @@ Začněte analýzou relevance rozhodnutí.""",
         print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
         import traceback
         traceback.print_exc()
+        traceback.print_exc()
