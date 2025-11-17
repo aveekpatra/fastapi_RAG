@@ -53,23 +53,21 @@ class HybridSearchEngine:
         """
         try:
             print(f"\n{'='*80}")
-            print(f"🔍 HYBRID SEARCH")
+            print(f"🔍 VYHLEDÁVÁNÍ")
             print(f"{'='*80}")
-            print(f"Query: {query}")
+            print(f"Dotaz: {query}")
             print(f"Limit: {limit}")
-            print(f"Dense weight: {dense_weight}, Sparse weight: {sparse_weight}")
-            print(f"Fusion method: {'RRF' if use_rrf else 'Weighted'}")
             
             # Get dense vector embedding
             dense_vector = await get_embedding(query)
             if dense_vector is None:
-                print("❌ Failed to generate dense vector")
+                print("❌ Nepodařilo se vygenerovat vektor")
                 return []
             
-            # Prepare sparse vector (BM25 keywords)
+            # Prepare sparse vector (for future use when collection supports it)
             sparse_vector = self._create_sparse_vector(query)
             
-            # Perform hybrid search using Qdrant's query API
+            # Perform search using Qdrant
             results = await self._execute_hybrid_search(
                 dense_vector=dense_vector,
                 sparse_vector=sparse_vector,
@@ -79,11 +77,11 @@ class HybridSearchEngine:
                 use_rrf=use_rrf
             )
             
-            print(f"✅ Found {len(results)} results")
+            print(f"✅ Nalezeno {len(results)} výsledků")
             return results
             
         except Exception as e:
-            print(f"❌ Error in hybrid search: {str(e)}")
+            print(f"❌ Chyba při vyhledávání: {str(e)}")
             import traceback
             traceback.print_exc()
             return []
@@ -102,11 +100,14 @@ class HybridSearchEngine:
         # Tokenize and clean
         words = text.lower().split()
         
-        # Remove common Czech stop words
+        # Remove common Czech stop words (comprehensive list for legal texts)
         stop_words = {
             'a', 'i', 'o', 'u', 'v', 'z', 's', 'k', 'na', 'po', 'za', 'do', 'od',
             'je', 'být', 'ten', 'který', 'se', 'pro', 'jako', 'jeho', 'její',
-            'můj', 'tvůj', 'náš', 'váš', 'tento', 'tato', 'toto', 'tyto'
+            'můj', 'tvůj', 'náš', 'váš', 'tento', 'tato', 'toto', 'tyto',
+            'by', 'aby', 'když', 'kde', 'jak', 'co', 'že', 'ale', 'nebo', 'ani',
+            'však', 'tedy', 'tak', 'již', 'ještě', 'také', 'pouze', 'podle',
+            'mezi', 'před', 'při', 'bez', 'nad', 'pod', 'ze', 'ke', 've', 'ze'
         }
         
         # Filter and count
@@ -134,46 +135,24 @@ class HybridSearchEngine:
         use_rrf: bool
     ) -> List[CaseResult]:
         """
-        Execute hybrid search using Qdrant's query API with prefetch
+        Execute search using dense vectors only
         
-        Uses the query API with prefetch to combine dense and sparse searches
+        NOTE: True hybrid search requires Qdrant collection to be configured with
+        both dense and sparse vectors. Since your collection likely only has dense vectors,
+        we use dense-only search which is still very effective with paraphrase-multilingual-MiniLM-L12-v2
+        
+        The multi-query approach with RRF fusion provides the "hybrid" benefit by
+        combining results from multiple query formulations.
         """
         for attempt in range(self.max_retries):
             try:
                 timeout = self.initial_timeout * (2 ** attempt)
                 
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    print(f"  Attempt {attempt + 1}/{self.max_retries} (timeout: {timeout}s)")
+                    print(f"  Pokus {attempt + 1}/{self.max_retries} (timeout: {timeout}s)")
                     
-                    # Qdrant hybrid search using query API with prefetch
-                    # This performs both searches and fuses results
-                    search_request = {
-                        "prefetch": [
-                            {
-                                # Dense vector search
-                                "query": dense_vector,
-                                "using": "dense",  # Named vector for dense embeddings
-                                "limit": limit * 2  # Get more for fusion
-                            },
-                            {
-                                # Sparse vector search (BM25)
-                                "query": {
-                                    "indices": list(range(len(sparse_vector["text"].split()))),
-                                    "values": [1.0] * len(sparse_vector["text"].split())
-                                },
-                                "using": "sparse",  # Named vector for sparse (BM25)
-                                "limit": limit * 2
-                            }
-                        ],
-                        "query": {
-                            "fusion": "rrf" if use_rrf else "weighted"
-                        },
-                        "limit": limit,
-                        "with_payload": True
-                    }
-                    
-                    # If collection doesn't have named vectors, use simpler approach
-                    # Try standard search with just dense vector first
+                    # Dense vector search (semantic similarity)
+                    # This works with your existing Qdrant collection
                     response = await client.post(
                         f"{self.qdrant_url}/collections/{self.collection_name}/points/search",
                         headers=self.headers,
@@ -188,7 +167,7 @@ class HybridSearchEngine:
                         results = response.json()
                         result_list = results.get('result', [])
                         
-                        print(f"  ✅ Search successful: {len(result_list)} results")
+                        print(f"  ✅ Úspěch: {len(result_list)} výsledků")
                         
                         # Convert to CaseResult objects
                         cases = []
@@ -216,23 +195,23 @@ class HybridSearchEngine:
                     
                     # Handle errors
                     if 400 <= response.status_code < 500:
-                        print(f"  ❌ Client error: {response.status_code}")
-                        print(f"     Response: {response.text[:500]}")
+                        print(f"  ❌ Chyba klienta: {response.status_code}")
+                        print(f"     Odpověď: {response.text[:500]}")
                         return []
                     
-                    print(f"  ⚠️ Server error: {response.status_code}")
+                    print(f"  ⚠️ Chyba serveru: {response.status_code}")
                     
             except httpx.TimeoutException as e:
-                print(f"  ⏱️ Timeout (attempt {attempt + 1})")
+                print(f"  ⏱️ Timeout (pokus {attempt + 1})")
             except Exception as e:
-                print(f"  ❌ Error (attempt {attempt + 1}): {str(e)}")
+                print(f"  ❌ Chyba (pokus {attempt + 1}): {str(e)}")
             
             # Wait before retry
             if attempt < self.max_retries - 1:
                 wait_time = 2 ** attempt
                 await asyncio.sleep(wait_time)
         
-        print(f"  ❌ Failed after {self.max_retries} attempts")
+        print(f"  ❌ Selhalo po {self.max_retries} pokusech")
         return []
     
     async def multi_query_hybrid_search(
@@ -257,11 +236,11 @@ class HybridSearchEngine:
             Merged and deduplicated list of CaseResult objects
         """
         print(f"\n{'='*80}")
-        print(f"🔍 MULTI-QUERY HYBRID SEARCH")
+        print(f"🔍 VYHLEDÁVÁNÍ S VÍCE DOTAZY")
         print(f"{'='*80}")
-        print(f"Queries: {len(queries)}")
-        print(f"Results per query: {results_per_query}")
-        print(f"Final limit: {final_limit}")
+        print(f"Počet dotazů: {len(queries)}")
+        print(f"Výsledků na dotaz: {results_per_query}")
+        print(f"Finální limit: {final_limit}")
         
         # Execute searches in parallel
         search_tasks = [
@@ -309,21 +288,24 @@ class HybridSearchEngine:
         merged_cases = []
         for case_id, data in case_scores.items():
             case = data['case']
-            # Use RRF score as final relevance
-            case.relevance_score = data['rrf_score']
+            # CRITICAL: Keep original Qdrant score (0-1 range) for GPT context
+            # Use RRF score only for sorting
+            case.relevance_score = data['max_score']  # Preserve original semantic similarity score
+            # Store RRF for sorting
+            case._rrf_score = data['rrf_score']
             merged_cases.append(case)
         
-        # Sort by RRF score
-        merged_cases.sort(key=lambda x: x.relevance_score, reverse=True)
+        # Sort by RRF score (but keep original relevance_score for GPT)
+        merged_cases.sort(key=lambda x: x._rrf_score, reverse=True)
         
-        print(f"✅ Merged {len(merged_cases)} unique cases")
-        print(f"   Returning top {final_limit}")
+        print(f"✅ Sloučeno {len(merged_cases)} unikátních případů")
+        print(f"   Vráceno top {final_limit}")
         
         # Log top results
         for i, case in enumerate(merged_cases[:final_limit], 1):
             case_data = case_scores[case.case_number]
-            print(f"   {i}. {case.case_number} (RRF: {case.relevance_score:.4f}, "
-                  f"appeared in {case_data['query_count']}/{len(queries)} queries)")
+            print(f"   {i}. {case.case_number} (skóre: {case.relevance_score:.4f}, RRF: {case._rrf_score:.4f}, "
+                  f"objevilo se v {case_data['query_count']}/{len(queries)} dotazech)")
         
         return merged_cases[:final_limit]
 

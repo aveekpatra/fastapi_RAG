@@ -51,7 +51,7 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
     Args:
         question: Original user question
         client: OpenAI client instance
-        num_queries: Number of queries to generate (default: 3)
+        num_queries: Number of queries to generate (default: 2)
     
     Returns:
         List of generated search queries that maintain original intent
@@ -92,17 +92,24 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
             validated_queries = [question]
         
         # Always include original question as first query for safety
-        final_queries = [question] + [q for q in validated_queries if q != question]
-        final_queries = final_queries[:num_queries + 1]  # Original + generated
+        # Then add validated queries (excluding duplicates of original)
+        final_queries = [question]
+        for q in validated_queries:
+            if q != question and len(final_queries) < num_queries:
+                final_queries.append(q)
         
-        print(f"✅ Generated {len(final_queries)} search queries (including original):")
+        # If we don't have enough queries, just use original
+        if len(final_queries) < num_queries:
+            print(f"⚠️ Varování: Vygenerováno pouze {len(final_queries)} dotazů místo {num_queries}")
+        
+        print(f"✅ Vygenerováno {len(final_queries)} vyhledávacích dotazů (včetně původního):")
         for i, q in enumerate(final_queries, 1):
-            marker = "📌 ORIGINAL" if i == 1 else f"🔍 VARIANT {i-1}"
+            marker = "📌 PŮVODNÍ" if i == 1 else f"🔍 VARIANTA {i-1}"
             print(f"  {marker}: {q}")
         
         return final_queries
         
     except Exception as e:
-        print(f"❌ Error generating queries: {str(e)}")
+        print(f"❌ Chyba při generování dotazů: {str(e)}")
         # Fallback to original question
         return [question]

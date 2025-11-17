@@ -37,10 +37,10 @@ async def get_cases_from_qdrant(
         use_improved_rag = settings.USE_IMPROVED_RAG
     
     if use_improved_rag:
-        print("Using IMPROVED RAG pipeline (query generation + hybrid search)")
+        print("Používám VYLEPŠENÝ RAG (generování dotazů + vyhledávání)")
         return await _get_cases_improved_rag(question, top_k, openai_client)
     else:
-        print("Using BASIC RAG pipeline (single vector search)")
+        print("Používám ZÁKLADNÍ RAG (jedno vektorové vyhledávání)")
         return await _get_cases_basic(question, top_k)
 
 
@@ -243,7 +243,7 @@ async def _get_cases_improved_rag(
     """
     try:
         print(f"\n{'='*80}")
-        print(f"🚀 IMPROVED RAG PIPELINE WITH HYBRID SEARCH")
+        print(f"🚀 VYLEPŠENÝ RAG S VÍCE DOTAZY")
         print(f"{'='*80}")
         
         # Step 1: Generate search queries that maintain original meaning
@@ -257,9 +257,9 @@ async def _get_cases_improved_rag(
             num_queries=2  # Hardcoded: original + 1 variant
         )
         
-        print(f"\n📝 Generated {len(queries)} queries (including original)")
+        print(f"\n📝 Vygenerováno {len(queries)} dotazů (včetně původního)")
         
-        # Step 2: Perform HYBRID search for each query
+        # Step 2: Perform multi-query search for each query
         from app.services.hybrid_search_v2 import hybrid_search_engine
         
         final_cases = await hybrid_search_engine.multi_query_hybrid_search(
@@ -270,15 +270,15 @@ async def _get_cases_improved_rag(
             sparse_weight=0.3   # Hardcoded: 30% keyword matching
         )
         
-        print(f"\n✅ Improved RAG pipeline returned {len(final_cases)} cases")
-        print(f"   All cases include FULL CONTEXT (no truncation)")
+        print(f"\n✅ Vylepšený RAG vrátil {len(final_cases)} případů")
+        print(f"   Všechny případy obsahují PLNÝ KONTEXT (bez zkrácení)")
         
         return final_cases
         
     except Exception as e:
-        print(f"\n❌ Error in improved RAG pipeline: {str(e)}")
+        print(f"\n❌ Chyba ve vylepšeném RAG: {str(e)}")
         import traceback
         traceback.print_exc()
-        print("\n⚠️ Falling back to basic search")
+        print("\n⚠️ Přepínám na základní vyhledávání")
         # Fallback to basic search
         return await _get_cases_basic(question, top_k)
