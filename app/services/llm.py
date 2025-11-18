@@ -273,7 +273,7 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4000,
+            max_tokens=4000,  # Sufficient for reasoning + output
             extra_body={
                 "provider": {
                     "order": ["Azure"],
@@ -340,7 +340,7 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4000,
+            max_tokens=4000,  # Sufficient for reasoning + output
             stream=True,
             extra_body={
                 "provider": {
@@ -352,31 +352,33 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
 
         chunk_count = 0
         total_chunks_received = 0
-        thinking_chunks = 0
+        reasoning_chunks = 0
         
         for chunk in stream:
             total_chunks_received += 1
             
-            # Debug: Check what's in the chunk
-            if hasattr(chunk.choices[0].delta, 'reasoning_content'):
-                thinking_chunks += 1
-                # GPT-5 thinking phase - don't yield, just count
+            # GPT-5 reasoning tokens - skip them (not visible content)
+            if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
+                reasoning_chunks += 1
                 continue
             
+            # Only yield actual content
             if chunk.choices[0].delta.content:
                 chunk_count += 1
                 content = chunk.choices[0].delta.content
                 yield content
         
-        print(f"✅ Yielded {chunk_count} chunks from OpenAI")
+        print(f"✅ Yielded {chunk_count} content chunks")
         print(f"📊 Total chunks received: {total_chunks_received}")
-        if thinking_chunks > 0:
-            print(f"🧠 Thinking chunks (not yielded): {thinking_chunks}")
+        if reasoning_chunks > 0:
+            print(f"🧠 Reasoning chunks (GPT-5 thinking): {reasoning_chunks}")
         
         if chunk_count == 0:
-            print("⚠️ WARNING: OpenAI returned 0 chunks!")
+            print("⚠️ WARNING: OpenAI returned 0 content chunks!")
             if total_chunks_received > 0:
-                print(f"   But received {total_chunks_received} total chunks (possibly thinking tokens)")
+                print(f"   Received {total_chunks_received} total chunks ({reasoning_chunks} reasoning)")
+                print(f"   ⚠️ GPT-5 may have exhausted tokens on reasoning phase!")
+                print(f"   💡 Try increasing max_tokens or reducing context size")
 
     except Exception as e:
         print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
@@ -426,7 +428,7 @@ Vytvořte krátké shrnutí (2-3 věty):"""
                 }
             ],
             temperature=0.3,
-            max_tokens=300,
+            max_tokens=2000,  # Increased for GPT-5 reasoning phase + output
             stream=True,
             extra_body={
                 "provider": {

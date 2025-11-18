@@ -64,7 +64,7 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
                 {"role": "user", "content": question}
             ],
             temperature=0.5,  # Hardcoded: Lower temperature for focused queries
-            max_tokens=300,  # Hardcoded: Enough for 2-3 short queries
+            max_tokens=2000,  # Increased for GPT-5 reasoning phase + output
             extra_body={
                 "provider": {
                     "order": ["Azure"],
