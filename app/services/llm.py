@@ -232,7 +232,7 @@ async def answer_based_on_cases(
     question: str, cases: list[CaseResult], client: OpenAI
 ) -> str:
     """
-    GPT-4o answers the question based on FULL case data with citations
+    GPT answers the question based on FULL case data with citations
     NO TRUNCATION - All context is passed to GPT
     """
     try:
@@ -266,7 +266,7 @@ PŘÍKLAD DOBRÉ ODPOVĚDI:
 DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
 
         response = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-5-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -292,7 +292,7 @@ async def answer_based_on_cases_stream(
     question: str, cases: list[CaseResult], client: OpenAI
 ):
     """
-    Stream GPT-4o answer based on FULL case data - NO TRUNCATION
+    Stream GPT answer based on FULL case data - NO TRUNCATION
     """
     try:
         print(f"\n{'='*80}")
@@ -327,7 +327,7 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
 
         print(f"🤖 Starting OpenAI streaming...")
         stream = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-5-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -379,7 +379,7 @@ Vytvořte KRÁTKÉ shrnutí (2-3 věty), které:
 NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
 
         stream = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-5-mini",
             messages=[
                 {"role": "system", "content": summary_prompt},
                 {
