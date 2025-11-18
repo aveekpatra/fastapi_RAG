@@ -65,6 +65,12 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
             ],
             temperature=0.5,  # Hardcoded: Lower temperature for focused queries
             max_tokens=300,  # Hardcoded: Enough for 2-3 short queries
+            extra_body={
+                "provider": {
+                    "order": ["Azure"],
+                    "allow_fallbacks": False
+                }
+            }
         )
         
         generated_text = (response.choices[0].message.content or "").strip()

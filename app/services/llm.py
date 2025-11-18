@@ -274,6 +274,12 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
             ],
             temperature=0.3,
             max_tokens=4000,
+            extra_body={
+                "provider": {
+                    "order": ["Azure"],
+                    "allow_fallbacks": False
+                }
+            }
         )
 
         answer = (response.choices[0].message.content or "").strip()
@@ -336,6 +342,12 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
             temperature=0.3,
             max_tokens=4000,
             stream=True,
+            extra_body={
+                "provider": {
+                    "order": ["Azure"],
+                    "allow_fallbacks": False
+                }
+            }
         )
 
         chunk_count = 0
@@ -416,6 +428,12 @@ Vytvořte krátké shrnutí (2-3 věty):"""
             temperature=0.3,
             max_tokens=300,
             stream=True,
+            extra_body={
+                "provider": {
+                    "order": ["Azure"],
+                    "allow_fallbacks": False
+                }
+            }
         )
 
         for chunk in stream:
