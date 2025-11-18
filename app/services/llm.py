@@ -388,10 +388,10 @@ NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
 {question}
 
 WEBOVÁ ODPOVĚĎ:
-{web_answer[:1000]}
+{web_answer[:5000]}
 
 ODPOVĚĎ ZE SOUDNÍCH ROZHODNUTÍ:
-{case_answer[:1000]}
+{case_answer[:5000]}
 
 Vytvořte krátké shrnutí (2-3 věty):"""
                 }
