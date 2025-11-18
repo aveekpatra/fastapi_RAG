@@ -115,14 +115,20 @@ async def case_search(
 
         # Generate case-based answer
         answer = ""
+        filtered_cases = supporting_cases
         if supporting_cases:
             answer = await answer_based_on_cases(
                 request.question, supporting_cases, client
             )
+            
+            # Check if GPT says cases are not relevant
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in answer or "žádné relevantní případy" in answer.lower():
+                # Cases are not relevant, return empty list
+                filtered_cases = []
 
         return CaseSearchResponse(
             answer=answer,
-            supporting_cases=supporting_cases,
+            supporting_cases=filtered_cases,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -165,6 +171,7 @@ async def case_search_stream(
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
 
+            full_answer = ""
             if supporting_cases:
                 print(f"✅ Starting to stream answer for {len(supporting_cases)} cases")
                 chunk_count = 0
@@ -172,6 +179,7 @@ async def case_search_stream(
                     question, supporting_cases, client
                 ):
                     chunk_count += 1
+                    full_answer += chunk
                     data = {
                         "type": "case_answer_chunk",
                         "content": chunk,
@@ -183,9 +191,17 @@ async def case_search_stream(
 
             yield 'data: {"type": "gpt_answer_end"}\n\n'
 
+            # Check if GPT says cases are not relevant
+            cases_are_relevant = True
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in full_answer or "žádné relevantní případy" in full_answer.lower():
+                cases_are_relevant = False
+                print("⚠️ GPT indicated cases are not relevant, hiding case list")
+
             yield 'data: {"type": "cases_start"}\n\n'
 
-            for case in supporting_cases:
+            # Only show cases if they are relevant
+            if cases_are_relevant:
+                for case in supporting_cases:
                 case_data = {
                     "type": "case",
                     "case_number": case.case_number,
@@ -243,17 +259,23 @@ async def combined_search(
 
         # Generate case-based answer
         case_answer = ""
+        filtered_cases = supporting_cases
         if supporting_cases:
             case_answer = await answer_based_on_cases(
                 request.question, supporting_cases, client
             )
+            
+            # Check if GPT says cases are not relevant
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer or "žádné relevantní případy" in case_answer.lower():
+                # Cases are not relevant, return empty list
+                filtered_cases = []
 
         return CombinedSearchResponse(
             web_answer=web_answer,
             web_source="Perplexity Sonar via OpenRouter",
             web_citations=web_citations,
             case_answer=case_answer,
-            supporting_cases=supporting_cases,
+            supporting_cases=filtered_cases,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -339,9 +361,17 @@ async def combined_search_stream(
 
             yield 'data: {"type": "gpt_answer_end"}\n\n'
 
+            # Check if GPT says cases are not relevant
+            cases_are_relevant = True
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer_full or "žádné relevantní případy" in case_answer_full.lower():
+                cases_are_relevant = False
+                print("⚠️ GPT indicated cases are not relevant, hiding case list")
+
             yield 'data: {"type": "cases_start"}\n\n'
 
-            for case in supporting_cases:
+            # Only show cases if they are relevant
+            if cases_are_relevant:
+                for case in supporting_cases:
                 case_data = {
                     "type": "case",
                     "case_number": case.case_number,
