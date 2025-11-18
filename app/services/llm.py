@@ -128,6 +128,7 @@ def get_openai_client() -> OpenAI:
     return OpenAI(
         api_key=settings.OPENROUTER_API_KEY,
         base_url=settings.OPENROUTER_BASE_URL,
+        timeout=300.0,  # 5 minutes for thinking models like GPT-5
     )
 
 
@@ -338,16 +339,32 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
         )
 
         chunk_count = 0
+        total_chunks_received = 0
+        thinking_chunks = 0
+        
         for chunk in stream:
+            total_chunks_received += 1
+            
+            # Debug: Check what's in the chunk
+            if hasattr(chunk.choices[0].delta, 'reasoning_content'):
+                thinking_chunks += 1
+                # GPT-5 thinking phase - don't yield, just count
+                continue
+            
             if chunk.choices[0].delta.content:
                 chunk_count += 1
                 content = chunk.choices[0].delta.content
                 yield content
         
         print(f"✅ Yielded {chunk_count} chunks from OpenAI")
+        print(f"📊 Total chunks received: {total_chunks_received}")
+        if thinking_chunks > 0:
+            print(f"🧠 Thinking chunks (not yielded): {thinking_chunks}")
         
         if chunk_count == 0:
             print("⚠️ WARNING: OpenAI returned 0 chunks!")
+            if total_chunks_received > 0:
+                print(f"   But received {total_chunks_received} total chunks (possibly thinking tokens)")
 
     except Exception as e:
         print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
