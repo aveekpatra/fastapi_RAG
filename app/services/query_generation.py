@@ -58,7 +58,7 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
     """
     try:
         response = client.chat.completions.create(
-            model="openai/gpt-5-mini",
+            model="openai/gpt-5-nano",
             messages=[
                 {"role": "system", "content": QUERY_GENERATION_PROMPT},
                 {"role": "user", "content": question}

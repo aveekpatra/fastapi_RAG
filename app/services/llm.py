@@ -266,7 +266,7 @@ PŘÍKLAD DOBRÉ ODPOVĚDI:
 DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
 
         response = client.chat.completions.create(
-            model="openai/gpt-5-mini",
+            model="openai/gpt-5-nano",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -327,7 +327,7 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
 
         print(f"🤖 Starting OpenAI streaming...")
         stream = client.chat.completions.create(
-            model="openai/gpt-5-mini",
+            model="openai/gpt-5-nano",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -379,7 +379,7 @@ Vytvořte KRÁTKÉ shrnutí (2-3 věty), které:
 NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
 
         stream = client.chat.completions.create(
-            model="openai/gpt-5-mini",
+            model="openai/gpt-5-nano",
             messages=[
                 {"role": "system", "content": summary_prompt},
                 {

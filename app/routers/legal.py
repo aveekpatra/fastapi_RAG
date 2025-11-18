@@ -202,20 +202,20 @@ async def case_search_stream(
             # Only show cases if they are relevant
             if cases_are_relevant:
                 for case in supporting_cases:
-                case_data = {
-                    "type": "case",
-                    "case_number": case.case_number,
-                    "court": case.court,
-                    "judge": case.judge,
-                    "subject": case.subject,
-                    "date_issued": case.date_issued,
-                    "ecli": case.ecli,
-                    "keywords": case.keywords,
-                    "legal_references": case.legal_references,
-                    "relevance_score": round(case.relevance_score, 3),
-                    "source_url": case.source_url,
-                }
-                yield f"data: {json.dumps(case_data)}\n\n"
+                    case_data = {
+                        "type": "case",
+                        "case_number": case.case_number,
+                        "court": case.court,
+                        "judge": case.judge,
+                        "subject": case.subject,
+                        "date_issued": case.date_issued,
+                        "ecli": case.ecli,
+                        "keywords": case.keywords,
+                        "legal_references": case.legal_references,
+                        "relevance_score": round(case.relevance_score, 3),
+                        "source_url": case.source_url,
+                    }
+                    yield f"data: {json.dumps(case_data)}\n\n"
 
             yield 'data: {"type": "case_search_end"}\n\n'
 
@@ -372,20 +372,20 @@ async def combined_search_stream(
             # Only show cases if they are relevant
             if cases_are_relevant:
                 for case in supporting_cases:
-                case_data = {
-                    "type": "case",
-                    "case_number": case.case_number,
-                    "court": case.court,
-                    "judge": case.judge,
-                    "subject": case.subject,
-                    "date_issued": case.date_issued,
-                    "ecli": case.ecli,
-                    "keywords": case.keywords,
-                    "legal_references": case.legal_references,
-                    "relevance_score": round(case.relevance_score, 3),
-                    "source_url": case.source_url,
-                }
-                yield f"data: {json.dumps(case_data)}\n\n"
+                    case_data = {
+                        "type": "case",
+                        "case_number": case.case_number,
+                        "court": case.court,
+                        "judge": case.judge,
+                        "subject": case.subject,
+                        "date_issued": case.date_issued,
+                        "ecli": case.ecli,
+                        "keywords": case.keywords,
+                        "legal_references": case.legal_references,
+                        "relevance_score": round(case.relevance_score, 3),
+                        "source_url": case.source_url,
+                    }
+                    yield f"data: {json.dumps(case_data)}\n\n"
 
             yield 'data: {"type": "case_search_end"}\n\n'
 
