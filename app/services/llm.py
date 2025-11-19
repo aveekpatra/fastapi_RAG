@@ -267,13 +267,13 @@ PŘÍKLAD DOBRÉ ODPOVĚDI:
 DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
 
         response = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-4o-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4000,  # Sufficient for reasoning + output
+            max_tokens=4000,
             extra_body={
                 "provider": {
                     "order": ["Azure"],
@@ -334,13 +334,13 @@ DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek
 
         print(f"🤖 Starting OpenAI streaming...")
         stream = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-4o-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4000,  # Sufficient for reasoning + output
+            max_tokens=4000,
             stream=True,
             extra_body={
                 "provider": {
@@ -410,7 +410,7 @@ Vytvořte KRÁTKÉ shrnutí (2-3 věty), které:
 NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
 
         stream = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-4o-mini",
             messages=[
                 {"role": "system", "content": summary_prompt},
                 {
@@ -428,7 +428,7 @@ Vytvořte krátké shrnutí (2-3 věty):"""
                 }
             ],
             temperature=0.3,
-            max_tokens=2000,  # Increased for GPT-5 reasoning phase + output
+            max_tokens=2000,
             stream=True,
             extra_body={
                 "provider": {

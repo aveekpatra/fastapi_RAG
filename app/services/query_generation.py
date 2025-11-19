@@ -58,13 +58,13 @@ async def generate_search_queries(question: str, client: OpenAI, num_queries: in
     """
     try:
         response = client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-4o-mini",
             messages=[
                 {"role": "system", "content": QUERY_GENERATION_PROMPT},
                 {"role": "user", "content": question}
             ],
             temperature=0.5,  # Hardcoded: Lower temperature for focused queries
-            max_tokens=2000,  # Increased for GPT-5 reasoning phase + output
+            max_tokens=2000,
             extra_body={
                 "provider": {
                     "order": ["Azure"],
