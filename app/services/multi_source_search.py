@@ -81,7 +81,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             description="Rozhodnutí Nejvyššího soudu ČR (1.1M+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
-            court_field="source",  # Supreme court has 'source' field
+            court_field="court",  # Not in payload, use display_name (ignore 'source' field)
             date_field="date",
             uses_chunking=True,
             chunk_text_field="chunk_text",

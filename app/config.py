@@ -46,7 +46,7 @@ class Settings:
     LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-5-mini")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.15"))  # Lower for max accuracy
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "32000"))  # GPT-5-mini supports 400K context
-    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "300.0"))  # 5 min - GPT-5-mini is faster
+    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "600.0"))  # 10 min for reasoning/thinking
     LLM_THINKING_BUDGET: int = int(os.getenv("LLM_THINKING_BUDGET", "10000"))  # Thinking tokens budget
     
     # Fast model for simple tasks (query generation, reranking)
