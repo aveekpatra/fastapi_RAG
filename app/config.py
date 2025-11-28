@@ -15,16 +15,15 @@ class Settings:
     QDRANT_PORT: str = os.getenv("QDRANT_PORT", "6333")
     QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
     QDRANT_HTTPS: bool = os.getenv("QDRANT_HTTPS", "False").lower() == "true"
-    QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "")
     
-    # Multi-collection configuration (new collections use Seznam/retromae-small-cs)
+    # Collection configuration - 4 collections total
+    # Original collection (384 dim, paraphrase-multilingual-MiniLM-L12-v2)
+    QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "czech_court_decisions_rag")
+    
+    # New collections (256 dim, Seznam/retromae-small-cs)
     QDRANT_CONSTITUTIONAL_COURT: str = os.getenv("QDRANT_CONSTITUTIONAL_COURT", "czech_constitutional_court")
     QDRANT_SUPREME_COURT: str = os.getenv("QDRANT_SUPREME_COURT", "czech_supreme_court")
-    QDRANT_SUPREME_ADMIN_COURT: str = os.getenv("QDRANT_SUPREME_ADMIN_COURT", "czech_supreme_admin_court")
-    
-    # Seznam embedding model for new collections
-    SEZNAM_EMBEDDING_MODEL: str = os.getenv("SEZNAM_EMBEDDING_MODEL", "Seznam/retromae-small-cs")
-    SEZNAM_VECTOR_SIZE: int = 256
+    QDRANT_SUPREME_ADMIN_COURT: str = os.getenv("QDRANT_SUPREME_ADMIN_COURT", "czech_supreme_administrative_court")
 
     # Server configuration
     PORT: int = int(os.getenv("PORT", "8000"))
@@ -34,34 +33,42 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 
-    # Qdrant retry configuration for serverless cold starts
+    # Qdrant retry configuration
     QDRANT_MAX_RETRIES: int = int(os.getenv("QDRANT_MAX_RETRIES", "3"))
     QDRANT_INITIAL_TIMEOUT: int = int(os.getenv("QDRANT_INITIAL_TIMEOUT", "30"))
-
-    # Improved RAG pipeline configuration - HARDCODED
-    USE_IMPROVED_RAG: bool = True  # Always use improved RAG with hybrid search
-    NUM_GENERATED_QUERIES: int = 2  # Generate 2 queries (original + 1 variant)
-    RESULTS_PER_QUERY: int = 10  # Get 10 results per query
-    FINAL_TOP_K: int = 5  # Return top 5 final results
-    
-    # Hybrid search configuration - HARDCODED
-    HYBRID_DENSE_WEIGHT: float = 0.7  # 70% semantic similarity (dense vectors)
-    HYBRID_SPARSE_WEIGHT: float = 0.3  # 30% keyword matching (sparse vectors/BM25)
-    USE_RRF_FUSION: bool = True  # Use Reciprocal Rank Fusion for combining results
 
     # LangChain configuration
     LANGCHAIN_TRACING_V2: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
     LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "")
     LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "czech-legal-assistant")
+
+    # GPT-5-mini configuration (400K context, optimized for reasoning)
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-5-mini")
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.15"))  # Lower for max accuracy
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "32000"))  # GPT-5-mini supports 400K context
+    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "300.0"))  # 5 min - GPT-5-mini is faster
+    LLM_THINKING_BUDGET: int = int(os.getenv("LLM_THINKING_BUDGET", "10000"))  # Thinking tokens budget
     
-    # LLM configuration
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
-    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "300.0"))
+    # Fast model for simple tasks (query generation, reranking)
+    FAST_MODEL: str = os.getenv("FAST_MODEL", "openai/gpt-5-nano")  # Ultra-fast for simple tasks
     
-    # Embedding configuration
+    # Reranking model (for quality improvement)
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "openai/gpt-5-nano")
+    
+    # Embedding models
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+    SEZNAM_EMBEDDING_MODEL: str = os.getenv("SEZNAM_EMBEDDING_MODEL", "Seznam/retromae-small-cs")
+    SEZNAM_VECTOR_SIZE: int = 256
+
+    # RAG Pipeline configuration
+    NUM_GENERATED_QUERIES: int = 3  # Generate 3 query variants
+    RESULTS_PER_QUERY: int = 15  # Get more results for better reranking
+    FINAL_TOP_K: int = 7  # Return top 7 after reranking
+    RERANK_TOP_K: int = 20  # Rerank top 20 candidates
+    
+    # Quality thresholds
+    MIN_RELEVANCE_SCORE: float = 0.3  # Minimum score to include
+    HIGH_RELEVANCE_THRESHOLD: float = 0.7  # High confidence threshold
 
     @property
     def qdrant_protocol(self) -> str:

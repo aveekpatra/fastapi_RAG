@@ -6,19 +6,22 @@ from pydantic import BaseModel, Field
 
 class DataSourceEnum(str, Enum):
     """Available data sources for legal search"""
-    GENERAL_COURTS = "general_courts"
+    # Main 3 court collections (Seznam/retromae model)
     CONSTITUTIONAL_COURT = "constitutional_court"
     SUPREME_COURT = "supreme_court"
     SUPREME_ADMIN_COURT = "supreme_admin_court"
-    ALL = "all"
+    # Search all 3 courts (default for explicit selection)
+    ALL_COURTS = "all_courts"
+    # Legacy collection (paraphrase-multilingual model)
+    GENERAL_COURTS = "general_courts"
 
 
 class QueryRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int = 7
     source: DataSourceEnum = Field(
-        default=DataSourceEnum.GENERAL_COURTS,
-        description="Data source to search: general_courts, constitutional_court, supreme_court, supreme_admin_court, or all"
+        default=DataSourceEnum.ALL_COURTS,
+        description="Data source: constitutional_court, supreme_court, supreme_admin_court, all_courts, or general_courts (legacy)"
     )
 
 
@@ -48,7 +51,6 @@ class DataSourceInfo(BaseModel):
     vector_size: int
     points_count: int
     status: str
-    uses_chunking: bool
 
 
 # Response model for web search (Sonar only)

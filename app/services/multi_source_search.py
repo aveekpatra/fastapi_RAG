@@ -1,10 +1,10 @@
 """
-Multi-Source Search Service
-Supports multiple Qdrant collections with different embedding models
-Allows frontend to toggle between data sources
+Multi-Source Search Service with Advanced Orchestration
+Supports multiple Qdrant collections with reranking and quality optimization
+Default: All 3 court collections (Seznam/retromae-small-cs)
 """
 import asyncio
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any
 from enum import Enum
 from dataclasses import dataclass
 import httpx
@@ -15,17 +15,17 @@ from app.models import CaseResult
 
 
 class DataSource(str, Enum):
-    """Available data sources for legal search"""
-    # Original collection - uses paraphrase-multilingual-MiniLM-L12-v2 (384 dim)
-    GENERAL_COURTS = "general_courts"
-    
-    # New collections - use Seznam/retromae-small-cs (256 dim)
+    """Available data sources - 3 court collections use Seznam model"""
+    # New collections - Seznam/retromae-small-cs (256 dim)
     CONSTITUTIONAL_COURT = "constitutional_court"
     SUPREME_COURT = "supreme_court"
     SUPREME_ADMIN_COURT = "supreme_admin_court"
     
-    # Search all sources
-    ALL = "all"
+    # Search all 3 court sources (DEFAULT)
+    ALL_COURTS = "all_courts"
+    
+    # Legacy: Original collection - paraphrase-multilingual (384 dim)
+    GENERAL_COURTS = "general_courts"
 
 
 @dataclass
@@ -36,41 +36,24 @@ class CollectionConfig:
     vector_size: int
     display_name: str
     description: str
-    # Payload field mappings (different collections may have different field names)
     case_number_field: str = "case_number"
-    text_field: str = "subject"  # Main text field for context
+    text_field: str = "subject"
     court_field: str = "court"
     date_field: str = "date_issued"
-    # Whether this collection uses chunking
     uses_chunking: bool = False
     chunk_text_field: str = "chunk_text"
     full_text_field: str = "full_text"
 
 
 def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
-    """
-    Get collection configurations using settings values
-    This is a function to ensure settings are loaded before accessing
-    """
+    """Get collection configurations - 3 main courts use Seznam model"""
     return {
-        DataSource.GENERAL_COURTS: CollectionConfig(
-            name=settings.QDRANT_COLLECTION,  # Original collection from env
-            embedding_model=settings.EMBEDDING_MODEL,
-            vector_size=384,
-            display_name="Obecné soudy",
-            description="Rozhodnutí obecných soudů ČR",
-            case_number_field="case_number",
-            text_field="subject",
-            court_field="court",
-            date_field="date_issued",
-            uses_chunking=False,
-        ),
         DataSource.CONSTITUTIONAL_COURT: CollectionConfig(
             name=settings.QDRANT_CONSTITUTIONAL_COURT,
             embedding_model=settings.SEZNAM_EMBEDDING_MODEL,
             vector_size=settings.SEZNAM_VECTOR_SIZE,
             display_name="Ústavní soud",
-            description="Nálezy a usnesení Ústavního soudu ČR",
+            description="Nálezy a usnesení Ústavního soudu ČR (510k+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
             court_field="court",
@@ -84,7 +67,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             embedding_model=settings.SEZNAM_EMBEDDING_MODEL,
             vector_size=settings.SEZNAM_VECTOR_SIZE,
             display_name="Nejvyšší soud",
-            description="Rozhodnutí Nejvyššího soudu ČR",
+            description="Rozhodnutí Nejvyššího soudu ČR (1.1M+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
             court_field="court",
@@ -98,7 +81,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             embedding_model=settings.SEZNAM_EMBEDDING_MODEL,
             vector_size=settings.SEZNAM_VECTOR_SIZE,
             display_name="Nejvyšší správní soud",
-            description="Rozhodnutí Nejvyššího správního soudu ČR",
+            description="Rozhodnutí Nejvyššího správního soudu ČR (695k+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
             court_field="court",
@@ -107,32 +90,40 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             chunk_text_field="chunk_text",
             full_text_field="full_text",
         ),
+        DataSource.GENERAL_COURTS: CollectionConfig(
+            name=settings.QDRANT_COLLECTION,
+            embedding_model=settings.EMBEDDING_MODEL,
+            vector_size=384,
+            display_name="Obecné soudy (legacy)",
+            description="Starší kolekce rozhodnutí obecných soudů",
+            case_number_field="case_number",
+            text_field="subject",
+            court_field="court",
+            date_field="date_issued",
+            uses_chunking=False,
+        ),
     }
 
 
-# Lazy-loaded collection configs
-COLLECTION_CONFIGS: Optional[Dict[DataSource, CollectionConfig]] = None
+# Lazy-loaded configs
+_COLLECTION_CONFIGS: Optional[Dict[DataSource, CollectionConfig]] = None
 
 
 def get_configs() -> Dict[DataSource, CollectionConfig]:
-    """Get or initialize collection configs"""
-    global COLLECTION_CONFIGS
-    if COLLECTION_CONFIGS is None:
-        COLLECTION_CONFIGS = get_collection_configs()
-    return COLLECTION_CONFIGS
+    global _COLLECTION_CONFIGS
+    if _COLLECTION_CONFIGS is None:
+        _COLLECTION_CONFIGS = get_collection_configs()
+    return _COLLECTION_CONFIGS
+
 
 
 class EmbeddingModelManager:
-    """
-    Manages multiple embedding models for different collections
-    Lazy loads models to save memory
-    """
+    """Manages multiple embedding models with lazy loading"""
     
     def __init__(self):
         self._models: Dict[str, SentenceTransformer] = {}
     
     def get_model(self, model_name: str) -> SentenceTransformer:
-        """Get or load an embedding model"""
         if model_name not in self._models:
             print(f"🧠 Loading embedding model: {model_name}")
             self._models[model_name] = SentenceTransformer(model_name, device="cpu")
@@ -140,29 +131,19 @@ class EmbeddingModelManager:
         return self._models[model_name]
     
     def get_embedding(self, text: str, model_name: str) -> List[float]:
-        """Generate embedding for text using specified model"""
         model = self.get_model(model_name)
-        # Seznam model uses normalized embeddings
         normalize = "retromae" in model_name.lower()
         embedding = model.encode(text, normalize_embeddings=normalize)
         return embedding.tolist()
-    
-    def get_embeddings_batch(self, texts: List[str], model_name: str) -> List[List[float]]:
-        """Generate embeddings for multiple texts"""
-        model = self.get_model(model_name)
-        normalize = "retromae" in model_name.lower()
-        embeddings = model.encode(texts, normalize_embeddings=normalize)
-        return [e.tolist() for e in embeddings]
 
 
-# Global embedding manager
 embedding_manager = EmbeddingModelManager()
 
 
 class MultiSourceSearchEngine:
     """
-    Search engine that supports multiple Qdrant collections
-    with different embedding models
+    Advanced search engine with orchestration, reranking, and quality optimization
+    Default: searches all 3 court collections (Seznam/retromae)
     """
     
     def __init__(self):
@@ -171,113 +152,124 @@ class MultiSourceSearchEngine:
         self.max_retries = settings.QDRANT_MAX_RETRIES
         self.initial_timeout = settings.QDRANT_INITIAL_TIMEOUT
 
-    async def search_collection(
+    async def orchestrated_search(
         self,
         query: str,
-        source: DataSource,
+        source: DataSource = DataSource.ALL_COURTS,
         limit: int = 10,
+        rerank: bool = True,
     ) -> List[CaseResult]:
         """
-        Search a specific collection
+        Main orchestrated search with quality optimization
         
-        Args:
-            query: Search query text
-            source: Data source to search
-            limit: Number of results to return
-        
-        Returns:
-            List of CaseResult objects
+        Pipeline:
+        1. Search specified source(s) - default ALL_COURTS (3 collections)
+        2. Deduplicate results
+        3. Filter by minimum relevance
+        4. Rerank using GPT-5-nano for quality
+        5. Return top results
         """
-        if source == DataSource.ALL:
-            return await self.search_all_sources(query, limit)
+        print(f"\n{'='*70}")
+        print(f"🎯 ORCHESTRATED SEARCH (GPT-5-mini pipeline)")
+        print(f"   Source: {source.value}")
+        print(f"   Query: {query[:80]}...")
+        print(f"{'='*70}")
         
-        configs = get_configs()
-        config = configs.get(source)
-        if not config:
-            print(f"❌ Unknown data source: {source}")
+        # Step 1: Get raw results
+        if source == DataSource.ALL_COURTS:
+            raw_results = await self._search_all_courts(query, limit * 2)
+        else:
+            raw_results = await self._search_single_source(query, source, limit * 2)
+        
+        if not raw_results:
+            print("⚠️ No results found")
             return []
         
-        try:
-            print(f"\n{'='*60}")
-            print(f"🔍 Searching: {config.display_name}")
-            print(f"   Collection: {config.name}")
-            print(f"   Model: {config.embedding_model}")
-            print(f"   Query: {query[:100]}...")
-            
-            # Generate embedding with the correct model
-            vector = embedding_manager.get_embedding(query, config.embedding_model)
-            print(f"   Vector size: {len(vector)}")
-            
-            # Execute search
-            results = await self._execute_search(config, vector, limit)
-            
-            print(f"✅ Found {len(results)} results from {config.display_name}")
-            return results
-            
-        except Exception as e:
-            print(f"❌ Error searching {config.display_name}: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+        print(f"📊 Raw results: {len(raw_results)}")
+        
+        # Step 2: Deduplicate
+        deduped = self._deduplicate_results(raw_results)
+        print(f"📊 After dedup: {len(deduped)}")
+        
+        # Step 3: Filter by minimum relevance
+        filtered = [r for r in deduped if r.relevance_score >= settings.MIN_RELEVANCE_SCORE]
+        print(f"📊 After filter (>{settings.MIN_RELEVANCE_SCORE}): {len(filtered)}")
+        
+        if not filtered:
+            filtered = deduped[:limit]  # Fallback to top results
+        
+        # Step 4: Rerank with GPT-5-nano (fast and accurate)
+        if rerank and len(filtered) > limit:
+            reranked = await self._rerank_with_llm(query, filtered[:settings.RERANK_TOP_K])
+            final = reranked[:limit]
+        else:
+            final = filtered[:limit]
+        
+        print(f"✅ Final results: {len(final)}")
+        return final
     
-    async def search_all_sources(
-        self,
-        query: str,
-        limit_per_source: int = 5,
-    ) -> List[CaseResult]:
-        """
-        Search all available sources and merge results
+    async def _search_all_courts(self, query: str, limit: int) -> List[CaseResult]:
+        """Search all 3 court collections in parallel (Seznam/retromae)"""
+        court_sources = [
+            DataSource.CONSTITUTIONAL_COURT,
+            DataSource.SUPREME_COURT,
+            DataSource.SUPREME_ADMIN_COURT,
+        ]
         
-        Args:
-            query: Search query text
-            limit_per_source: Results per source
+        # All 3 use same embedding model (Seznam), generate once
+        config = get_configs()[DataSource.CONSTITUTIONAL_COURT]
+        vector = embedding_manager.get_embedding(query, config.embedding_model)
         
-        Returns:
-            Merged list of CaseResult objects
-        """
-        print(f"\n{'='*60}")
-        print(f"🔍 Searching ALL sources")
-        print(f"{'='*60}")
+        print(f"🔍 Searching 3 courts in parallel...")
         
-        # Search all sources in parallel
-        sources = [s for s in DataSource if s != DataSource.ALL]
-        
+        # Search all in parallel
         tasks = [
-            self.search_collection(query, source, limit_per_source)
-            for source in sources
+            self._execute_search_with_vector(source, vector, limit // 3 + 5)
+            for source in court_sources
         ]
         
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Merge results
         merged = []
-        for source, results in zip(sources, all_results):
+        for source, results in zip(court_sources, all_results):
             if isinstance(results, Exception):
-                print(f"⚠️ Error from {source}: {results}")
+                print(f"⚠️ Error from {source.value}: {results}")
                 continue
             if results:
-                # Tag results with source
-                configs = get_configs()
+                config = get_configs()[source]
                 for r in results:
-                    # Add source info to court field if not already there
-                    config = configs.get(source)
-                    if config and config.display_name not in r.court:
-                        r.court = f"{r.court} ({config.display_name})"
+                    # Tag with source court
+                    if config.display_name not in (r.court or ""):
+                        r.court = f"{r.court or 'N/A'} ({config.display_name})"
+                    r.data_source = source.value
                 merged.extend(results)
+                print(f"   ✓ {config.display_name}: {len(results)} results")
         
-        # Sort by relevance score
+        # Sort by score
         merged.sort(key=lambda x: x.relevance_score, reverse=True)
-        
-        print(f"✅ Total merged results: {len(merged)}")
         return merged
     
-    async def _execute_search(
-        self,
-        config: CollectionConfig,
-        vector: List[float],
-        limit: int,
+    async def _search_single_source(
+        self, query: str, source: DataSource, limit: int
     ) -> List[CaseResult]:
-        """Execute search against a specific collection"""
+        """Search a single collection"""
+        configs = get_configs()
+        config = configs.get(source)
+        if not config:
+            return []
+        
+        vector = embedding_manager.get_embedding(query, config.embedding_model)
+        return await self._execute_search_with_vector(source, vector, limit)
+    
+    async def _execute_search_with_vector(
+        self, source: DataSource, vector: List[float], limit: int
+    ) -> List[CaseResult]:
+        """Execute search with pre-computed vector"""
+        configs = get_configs()
+        config = configs.get(source)
+        if not config:
+            return []
         
         for attempt in range(self.max_retries):
             try:
@@ -289,61 +281,47 @@ class MultiSourceSearchEngine:
                         headers=self.headers,
                         json={
                             "vector": vector,
-                            "limit": limit * 2 if config.uses_chunking else limit,  # Get more for dedup
+                            "limit": limit * 2 if config.uses_chunking else limit,
                             "with_payload": True,
                         }
                     )
                     
                     if response.status_code == 200:
-                        results = response.json()
-                        result_list = results.get('result', [])
+                        results = response.json().get('result', [])
+                        cases = self._convert_results(results, config)
                         
-                        # Convert to CaseResult objects
-                        cases = self._convert_results(result_list, config)
-                        
-                        # Deduplicate if chunked (same case may appear multiple times)
                         if config.uses_chunking:
-                            cases = self._deduplicate_chunked_results(cases, limit)
+                            cases = self._deduplicate_chunks(cases, limit)
                         
                         return cases[:limit]
                     
                     if 400 <= response.status_code < 500:
-                        print(f"  ❌ Client error: {response.status_code} - {response.text[:200]}")
+                        print(f"❌ Client error {response.status_code}: {response.text[:100]}")
                         return []
                     
-                    print(f"  ⚠️ Server error: {response.status_code}")
-                    
             except httpx.TimeoutException:
-                print(f"  ⏱️ Timeout (attempt {attempt + 1})")
+                print(f"⏱️ Timeout attempt {attempt + 1}")
             except Exception as e:
-                print(f"  ❌ Error (attempt {attempt + 1}): {e}")
+                print(f"❌ Error attempt {attempt + 1}: {e}")
             
             if attempt < self.max_retries - 1:
                 await asyncio.sleep(2 ** attempt)
         
         return []
     
-    def _convert_results(
-        self,
-        results: List[Dict],
-        config: CollectionConfig,
-    ) -> List[CaseResult]:
-        """Convert Qdrant results to CaseResult objects"""
+    def _convert_results(self, results: List[Dict], config: CollectionConfig) -> List[CaseResult]:
+        """Convert Qdrant results to CaseResult"""
         cases = []
-        
         for result in results:
             payload = result.get("payload", {})
             score = result.get("score", 0.0)
             
-            # Get text content based on collection type
             if config.uses_chunking:
-                # For chunked collections, prefer full_text if available (chunk 0)
                 subject = payload.get(config.full_text_field) or payload.get(config.chunk_text_field, "")
             else:
                 subject = payload.get(config.text_field, "")
             
-            # Build CaseResult with flexible field mapping
-            case = CaseResult(
+            cases.append(CaseResult(
                 case_number=payload.get(config.case_number_field, "N/A"),
                 court=payload.get(config.court_field, config.display_name),
                 judge=payload.get("judge"),
@@ -355,124 +333,119 @@ class MultiSourceSearchEngine:
                 legal_references=payload.get("legal_references", []),
                 source_url=payload.get("source_url"),
                 relevance_score=score,
-            )
-            cases.append(case)
-        
+                data_source=None,
+            ))
         return cases
     
-    def _deduplicate_chunked_results(
-        self,
-        cases: List[CaseResult],
-        limit: int,
-    ) -> List[CaseResult]:
-        """
-        Deduplicate results from chunked collections
-        Keep the highest scoring chunk for each case
-        """
-        seen_cases: Dict[str, CaseResult] = {}
-        
+    def _deduplicate_chunks(self, cases: List[CaseResult], limit: int) -> List[CaseResult]:
+        """Deduplicate chunked results - keep best chunk per case"""
+        seen: Dict[str, CaseResult] = {}
         for case in cases:
-            case_id = case.case_number
-            if case_id not in seen_cases:
-                seen_cases[case_id] = case
-            elif case.relevance_score > seen_cases[case_id].relevance_score:
-                seen_cases[case_id] = case
+            key = case.case_number
+            if key not in seen or case.relevance_score > seen[key].relevance_score:
+                seen[key] = case
         
-        # Sort by score and return
-        deduped = list(seen_cases.values())
-        deduped.sort(key=lambda x: x.relevance_score, reverse=True)
-        return deduped[:limit]
+        result = list(seen.values())
+        result.sort(key=lambda x: x.relevance_score, reverse=True)
+        return result[:limit]
+    
+    def _deduplicate_results(self, cases: List[CaseResult]) -> List[CaseResult]:
+        """Deduplicate across all sources"""
+        seen: Dict[str, CaseResult] = {}
+        for case in cases:
+            key = case.case_number
+            if key not in seen or case.relevance_score > seen[key].relevance_score:
+                seen[key] = case
+        
+        result = list(seen.values())
+        result.sort(key=lambda x: x.relevance_score, reverse=True)
+        return result
+    
+    async def _rerank_with_llm(
+        self, query: str, cases: List[CaseResult]
+    ) -> List[CaseResult]:
+        """Rerank using GPT-5-nano via LLM service"""
+        try:
+            from app.services.llm import llm_service
+            return await llm_service.rerank_cases(query, cases)
+        except Exception as e:
+            print(f"⚠️ Reranking failed: {e}")
+            return cases
+    
+    async def search_collection(
+        self, query: str, source: DataSource, limit: int = 10
+    ) -> List[CaseResult]:
+        """Backward compatible search method"""
+        return await self.orchestrated_search(query, source, limit, rerank=False)
     
     async def multi_query_search(
         self,
         queries: List[str],
-        source: DataSource,
+        source: DataSource = DataSource.ALL_COURTS,
         results_per_query: int = 10,
         final_limit: int = 5,
     ) -> List[CaseResult]:
         """
-        Multi-query search with RRF fusion for a specific source
-        
-        Args:
-            queries: List of search queries
-            source: Data source to search
-            results_per_query: Results per query
-            final_limit: Final number of results
-        
-        Returns:
-            Merged and ranked results
+        Multi-query search with RRF (Reciprocal Rank Fusion)
+        Default: searches all 3 courts
         """
-        print(f"\n{'='*60}")
-        print(f"🔍 Multi-query search: {source.value}")
-        print(f"   Queries: {len(queries)}")
-        print(f"{'='*60}")
+        print(f"\n🔍 Multi-query search: {len(queries)} queries → {source.value}")
         
         # Execute searches in parallel
         tasks = [
-            self.search_collection(query, source, results_per_query)
-            for query in queries
+            self.orchestrated_search(q, source, results_per_query, rerank=False)
+            for q in queries
         ]
-        
         all_results = await asyncio.gather(*tasks)
         
-        # RRF fusion
+        # RRF fusion (k=60 is standard)
         case_scores: Dict[str, Dict[str, Any]] = {}
         
-        for query_idx, query_results in enumerate(all_results):
+        for query_results in all_results:
             for rank, case in enumerate(query_results, 1):
-                case_id = case.case_number
+                key = case.case_number
                 rrf_score = 1.0 / (60 + rank)
                 
-                if case_id not in case_scores:
-                    case_scores[case_id] = {
+                if key not in case_scores:
+                    case_scores[key] = {
                         'case': case,
                         'rrf_score': rrf_score,
                         'max_score': case.relevance_score,
-                        'query_count': 1,
+                        'query_hits': 1,
                     }
                 else:
-                    case_scores[case_id]['rrf_score'] += rrf_score
-                    case_scores[case_id]['max_score'] = max(
-                        case_scores[case_id]['max_score'],
+                    case_scores[key]['rrf_score'] += rrf_score
+                    case_scores[key]['max_score'] = max(
+                        case_scores[key]['max_score'],
                         case.relevance_score
                     )
-                    case_scores[case_id]['query_count'] += 1
+                    case_scores[key]['query_hits'] += 1
         
-        # Sort by RRF score
+        # Sort by RRF score (cases appearing in multiple queries rank higher)
         merged = []
-        for case_id, data in case_scores.items():
+        for data in case_scores.values():
             case = data['case']
             case.relevance_score = data['max_score']
-            setattr(case, '_rrf_score', data['rrf_score'])
-            merged.append(case)
+            merged.append((data['rrf_score'], data['query_hits'], case))
         
-        merged.sort(key=lambda x: getattr(x, '_rrf_score', 0), reverse=True)
+        # Sort by RRF, then by query hits
+        merged.sort(key=lambda x: (x[0], x[1]), reverse=True)
         
-        print(f"✅ Merged {len(merged)} unique cases, returning top {final_limit}")
-        return merged[:final_limit]
+        print(f"✅ RRF merged: {len(merged)} unique cases")
+        return [case for _, _, case in merged[:final_limit]]
     
     async def get_available_sources(self) -> List[Dict[str, Any]]:
-        """
-        Get list of available data sources with their status
-        
-        Returns:
-            List of source info dictionaries
-        """
+        """Get available sources with status"""
         sources = []
         configs = get_configs()
         
         for source, config in configs.items():
-            if source == DataSource.ALL:
-                continue
-            
-            # Check if collection exists and get stats
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     response = await client.get(
                         f"{self.qdrant_url}/collections/{config.name}",
                         headers=self.headers,
                     )
-                    
                     if response.status_code == 200:
                         info = response.json().get('result', {})
                         points_count = info.get('points_count', 0)
@@ -493,7 +466,6 @@ class MultiSourceSearchEngine:
                 "vector_size": config.vector_size,
                 "points_count": points_count,
                 "status": status,
-                "uses_chunking": config.uses_chunking,
             })
         
         return sources
