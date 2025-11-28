@@ -2,9 +2,16 @@ fastapi==0.115.0
 uvicorn==0.30.0
 qdrant-client==1.15.1
 pydantic==2.12.4
-pydantic-settings==2.1.0
-requests==2.31.0
+pydantic-settings>=2.10.1
+requests>=2.32.5
 python-dotenv==1.0.0
 httpx==0.25.2
-openai==2.7.2
+openai>=2.7.2
 sentence-transformers==3.0.1
+
+# LangChain ecosystem
+langchain==1.1.0
+langchain-openai
+langchain-community
+langchain-huggingface
+langchain-core>=1.1.0

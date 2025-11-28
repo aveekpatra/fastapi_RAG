@@ -16,6 +16,15 @@ class Settings:
     QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
     QDRANT_HTTPS: bool = os.getenv("QDRANT_HTTPS", "False").lower() == "true"
     QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "")
+    
+    # Multi-collection configuration (new collections use Seznam/retromae-small-cs)
+    QDRANT_CONSTITUTIONAL_COURT: str = os.getenv("QDRANT_CONSTITUTIONAL_COURT", "czech_constitutional_court")
+    QDRANT_SUPREME_COURT: str = os.getenv("QDRANT_SUPREME_COURT", "czech_supreme_court")
+    QDRANT_SUPREME_ADMIN_COURT: str = os.getenv("QDRANT_SUPREME_ADMIN_COURT", "czech_supreme_admin_court")
+    
+    # Seznam embedding model for new collections
+    SEZNAM_EMBEDDING_MODEL: str = os.getenv("SEZNAM_EMBEDDING_MODEL", "Seznam/retromae-small-cs")
+    SEZNAM_VECTOR_SIZE: int = 256
 
     # Server configuration
     PORT: int = int(os.getenv("PORT", "8000"))
@@ -39,6 +48,20 @@ class Settings:
     HYBRID_DENSE_WEIGHT: float = 0.7  # 70% semantic similarity (dense vectors)
     HYBRID_SPARSE_WEIGHT: float = 0.3  # 30% keyword matching (sparse vectors/BM25)
     USE_RRF_FUSION: bool = True  # Use Reciprocal Rank Fusion for combining results
+
+    # LangChain configuration
+    LANGCHAIN_TRACING_V2: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+    LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "")
+    LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "czech-legal-assistant")
+    
+    # LLM configuration
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "300.0"))
+    
+    # Embedding configuration
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 
     @property
     def qdrant_protocol(self) -> str:

@@ -1,11 +1,25 @@
-from typing import Optional
+from typing import Optional, Literal
+from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class DataSourceEnum(str, Enum):
+    """Available data sources for legal search"""
+    GENERAL_COURTS = "general_courts"
+    CONSTITUTIONAL_COURT = "constitutional_court"
+    SUPREME_COURT = "supreme_court"
+    SUPREME_ADMIN_COURT = "supreme_admin_court"
+    ALL = "all"
 
 
 class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
+    source: DataSourceEnum = Field(
+        default=DataSourceEnum.GENERAL_COURTS,
+        description="Data source to search: general_courts, constitutional_court, supreme_court, supreme_admin_court, or all"
+    )
 
 
 class CaseResult(BaseModel):
@@ -20,6 +34,21 @@ class CaseResult(BaseModel):
     legal_references: list[str] = []
     source_url: Optional[str] = None
     relevance_score: float
+    # New field to indicate source collection
+    data_source: Optional[str] = None
+
+
+class DataSourceInfo(BaseModel):
+    """Information about a data source"""
+    id: str
+    name: str
+    description: str
+    collection: str
+    embedding_model: str
+    vector_size: int
+    points_count: int
+    status: str
+    uses_chunking: bool
 
 
 # Response model for web search (Sonar only)

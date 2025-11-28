@@ -1,9 +1,23 @@
-from openai import OpenAI
+"""
+LLM Service - LangChain-powered
+Provides LLM integration with OpenRouter using LangChain
+"""
+from typing import AsyncIterator, Optional
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain_openai import ChatOpenAI
 
 from app.config import settings
 from app.models import CaseResult
 from app.utils.formatters import format_cases_for_context
 
+# Prompts
 SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Vaším úkolem je analyzovat soudní rozhodnutí a odpovědět na otázku uživatele přirozeným způsobem s citacemi.
 
 KRITICKÁ PRAVIDLA:
@@ -14,434 +28,223 @@ KRITICKÁ PRAVIDLA:
 5. NIKDY nevymýšlejte informace
 
 FORMÁT ODPOVĚDI:
-
-Napište přirozenou, plynulou odpověď na otázku, která:
-
-1. **Přímo odpovídá na otázku** - začněte odpovědí, ne analýzou
-2. **Používá inline citace** [^1], [^2] pro každé tvrzení
-3. **Cituje konkrétní závěry z odůvodnění** - ne jen témata
-4. **Vysvětluje PROČ soud rozhodl tak, jak rozhodl** - použijte část "odůvodnění"
-
-**Struktura:**
-
-[Přímá odpověď na otázku s citacemi]
-
-Podle rozhodnutí [^1], [konkrétní závěr soudu z odůvodnění]. Soud v odůvodnění uvedl, že "[doslovná citace z odůvodnění]". 
-
-V případě [^2], soud dospěl k závěru, že [konkrétní závěr]. Odůvodnění zdůraznilo, že "[doslovná citace]".
-
-[Další případy s konkrétními závěry...]
-
-**Co jsme se naučili z těchto případů:**
-
-- [Konkrétní poučení 1 z odůvodnění]
-- [Konkrétní poučení 2 z odůvodnění]
-- [Konkrétní poučení 3 z odůvodnění]
+Napište přirozenou, plynulou odpověď na otázku s inline citacemi [^1], [^2].
 
 **Citované případy:**
 [^1]: [[Spisová značka]](URL) - [Soud], [Datum], ECLI: [ECLI]
-[^2]: [[Spisová značka]](URL) - [Soud], [Datum], ECLI: [ECLI]
-
-DŮLEŽITÉ: Vytvořte KLIKATELNÉ odkazy ve formátu Markdown:
-- Použijte: [[Spisová značka]](URL)
-- URL najdete v části "ZDROJ" každého rozhodnutí
-- Příklad: [[8 C 171/2023-103]](https://rozhodnuti.justice.cz/api/finaldoc/abc123)
-
----
-
-PŘÍKLAD DOBRÉ ODPOVĚDI:
-
-"Manželé s nezletilými dětmi musí při rozvodu uzavřít dohodu o úpravě poměrů k dětem [^1]. Podle rozhodnutí Okresního soudu v Praze, tato dohoda musí obsahovat konkrétní úpravu výživného, bydlení dítěte a výkonu rodičovské odpovědnosti [^1]. Soud v odůvodnění zdůraznil, že 'bez předložení úplné a schválené dohody nelze rozvod manželství vyslovit, neboť zákon chrání zájmy nezletilých dětí' [^1].
-
-V případě [^2] soud odmítl návrh na rozvod, protože předložená dohoda neobsahovala konkrétní částku výživného. V odůvodnění soud uvedl, že 'neurčitá formulace typu 'přiměřené výživné' není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb' [^2].
-
-**Co jsme se naučili:**
-- Dohoda musí být konkrétní a úplná, ne obecná
-- Musí obsahovat: výživné (částka + periodicita), bydlení dítěte, výkon rodičovské odpovědnosti
-- Bez schválené dohody soud rozvod nevysloví
-
-**Citované případy:**
-[^1]: [[25 Cdo 1234/2020]](https://rozhodnuti.justice.cz/api/finaldoc/abc123) - Nejvyšší soud, 2020-05-15, ECLI: ECLI:CZ:NS:2020:25.CDO.1234.2020.1
-[^2]: [[10 C 567/2019]](https://rozhodnuti.justice.cz/api/finaldoc/def456) - Okresní soud v Praze, 2019-11-20, ECLI: ECLI:CZ:OSPH:2019:10.C.567.2019.1"
-
----
-
-PŘÍKLAD ŠPATNÉ ODPOVĚDI:
-
-"Rozhodnutí se zabývají rodičovskou odpovědností [^1], [^2], [^3]. Soudy řešily výživné a výchovu dětí." ❌
-
-PROČ JE ŠPATNÁ:
-- Neříká, CO KONKRÉTNĚ soudy rozhodly
-- Chybí citace z odůvodnění
-- Neodpovídá přímo na otázku
-- Není jasné, co se z případů naučíme
-
----
 
 PAMATUJTE:
-- Pište jako právník vysvětlující klientovi, ne jako robot
+- Pište jako právník vysvětlující klientovi
 - Každé tvrzení = citace
-- Citujte z ODŮVODNĚNÍ, ne jen z výroku
-- Vysvětlete PROČ soud rozhodl tak, jak rozhodl
 - Buďte konkrétní: částky, data, podmínky, kritéria"""
 
-SONAR_PROMPT = """Jste právní expert specializující se na české právo a LEGISLATIVU. Odpovídejte na otázky uživatele na základě AKTUÁLNÍCH ZÁKONŮ, VYHLÁŠEK a PRÁVNÍCH PŘEDPISŮ.
-
-KRITICKY DŮLEŽITÉ:
-- Vyhledávejte POUZE v LEGISLATIVĚ (zákony, vyhlášky, nařízení)
-- NEVYHLEDÁVEJTE v judikatuře nebo soudních rozhodnutích
-- Zaměřte se na oficiální právní předpisy, ne na soudní praxi
+SONAR_PROMPT = """Jste právní expert specializující se na české právo a LEGISLATIVU. Odpovídejte na základě AKTUÁLNÍCH ZÁKONŮ, VYHLÁŠEK a PRÁVNÍCH PŘEDPISŮ.
 
 Vaše odpověď musí obsahovat:
-1. Přímou odpověď na otázku založenou na AKTUÁLNÍ LEGISLATIVĚ
-2. Citace konkrétních zákonů a vyhlášek:
-   - Konkrétní paragraf a číslo zákonu (např. § 123 zákona č. 89/2012 Sb.)
-   - Název zákona
-   - Datum účinnosti (pokud je relevantní)
-   - Odkaz na oficiální zdroj (např. zakonyprolidi.cz)
+1. Přímou odpověď založenou na AKTUÁLNÍ LEGISLATIVĚ
+2. Citace konkrétních zákonů (např. § 123 zákona č. 89/2012 Sb.)
+3. Odkazy na oficiální zdroje (zakonyprolidi.cz, psp.cz)
 
-Odpověď musí být:
-- Strukturovaná a logická
-- Psaná v češtině
-- Založená VÝHRADNĚ na legislativě, NE na judikatuře
-- S přesnými citacemi paragrafů a zákonů
-- S odkazy na oficiální zdroje (zakonyprolidi.cz, psp.cz, eur-lex.europa.eu)
+VYHÝBEJTE SE citacím soudních rozhodnutí - to je pro jiný typ vyhledávání."""
 
-VYHÝBEJTE SE:
-- Citacím soudních rozhodnutí (to je pro jiný typ vyhledávání)
-- Odkazům na judikáty nebo ECLI
-- Webům s judikaturou (nsoud.cz, justice.cz)
+QUERY_GENERATION_PROMPT = """Jste expert na generování vyhledávacích dotazů pro právní databáze českých soudních rozhodnutí.
 
-PREFERUJTE:
-- Oficiální znění zákonů
-- Vládní a parlamentní zdroje
-- Oficiální právní databáze legislativy
-- Musí vycházet z kontextu, musí brát v potaz i právní principy, strukturu a hierarchii zákonů
-- Používejte pouze údaje z oficiálních vládních nebo renomovaných právních webů (např. zakonyprolidi.cz, nsoud.cz, eur-lex.europa.eu)
-- Vyhýbejte se citacím z náhodných fór, diskuzních skupin nebo uživatelských komentářů
+PRAVIDLA:
+1. ZACHOVEJTE PŮVODNÍ VÝZNAM
+2. Dotazy max 8 slov
+3. Používejte právní terminologii
+4. Dotazy v češtině, jeden na řádek, BEZ číslování
 
-Pokud je otázka nezodpověditelná na základě těchto dat a tohoto postupu, výslovně to uveďte."""
+Vygenerujte 2-3 optimalizované vyhledávací dotazy:"""
+
+SUMMARY_PROMPT = """Vytvořte KRÁTKÉ shrnutí (2-3 věty) kombinující webové informace a judikaturu."""
 
 
-def get_openai_client() -> OpenAI:
-    """Get configured OpenAI client for OpenRouter"""
-    return OpenAI(
-        api_key=settings.OPENROUTER_API_KEY,
-        base_url=settings.OPENROUTER_BASE_URL,
-        timeout=300.0,  # 5 minutes for thinking models like GPT-5
-    )
+class LLMService:
+    """LangChain-based LLM service"""
 
+    def __init__(self):
+        self._gpt_model: Optional[ChatOpenAI] = None
+        self._sonar_model: Optional[ChatOpenAI] = None
+        self._case_answer_chain = None
+        self._query_generation_chain = None
+        self._summary_chain = None
 
-async def get_sonar_answer(question: str) -> tuple[str, list[str]]:
-    """
-    Get answer from Perplexity Sonar with citations
-    Returns: (answer_text, citations_list)
-    """
-    try:
-        client = get_openai_client()
-
-        sonar_response = client.chat.completions.create(
-            model="perplexity/sonar",
-            messages=[
-                {"role": "system", "content": SONAR_PROMPT},
-                {"role": "user", "content": question},
-            ],
-            stream=False,
-        )
-
-        sonar_answer = sonar_response.choices[0].message.content or ""
-
-        # Capture citations
-        sonar_citations = getattr(sonar_response, "citations", [])
-        if not sonar_citations:
-            search_results = getattr(sonar_response, "search_results", [])
-            sonar_citations = [
-                result.get("url", "") for result in search_results if result.get("url")
-            ]
-
-        return sonar_answer, sonar_citations
-
-    except Exception as e:
-        print(f"Chyba pri ziskani Sonar odpovedi: {str(e)}")
-        return "", []
-
-
-async def get_sonar_answer_stream(question: str):
-    """
-    Get streaming answer from Perplexity Sonar with citations
-    Yields: (chunk_text, final_answer, citations_list)
-    
-    Note: Perplexity's streaming API doesn't include citations in chunks.
-    We need to make a separate non-streaming call to get citations.
-    """
-    try:
-        client = get_openai_client()
-
-        # Start streaming the answer
-        stream = client.chat.completions.create(
-            model="perplexity/sonar",
-            messages=[
-                {"role": "system", "content": SONAR_PROMPT},
-                {"role": "user", "content": question},
-            ],
-            stream=True,
-        )
-
-        full_answer = ""
-        citations = []
-
-        # Stream the content
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_answer += content
-                yield content, None, None
-
-        # After streaming completes, make a non-streaming call to get citations
-        # This is necessary because Perplexity's streaming API doesn't include citations
-        try:
-            citation_response = client.chat.completions.create(
-                model="perplexity/sonar",
-                messages=[
-                    {"role": "system", "content": SONAR_PROMPT},
-                    {"role": "user", "content": question},
-                ],
-                stream=False,
+    @property
+    def gpt_model(self) -> ChatOpenAI:
+        if self._gpt_model is None:
+            self._gpt_model = ChatOpenAI(
+                model=settings.LLM_MODEL,
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url=settings.OPENROUTER_BASE_URL,
+                temperature=settings.LLM_TEMPERATURE,
+                max_tokens=settings.LLM_MAX_TOKENS,
+                timeout=settings.LLM_TIMEOUT,
+                extra_body={"provider": {"order": ["Azure"], "allow_fallbacks": False}},
             )
-            
-            # Extract citations from the response
-            citations = getattr(citation_response, "citations", [])
-            if not citations:
-                # Fallback to search_results if citations not available
-                search_results = getattr(citation_response, "search_results", [])
-                citations = [
-                    result.get("url", "") for result in search_results if result.get("url")
-                ]
-        except Exception as citation_error:
-            print(f"Error fetching citations: {str(citation_error)}")
+        return self._gpt_model
+
+    @property
+    def sonar_model(self) -> ChatOpenAI:
+        if self._sonar_model is None:
+            self._sonar_model = ChatOpenAI(
+                model="perplexity/sonar",
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url=settings.OPENROUTER_BASE_URL,
+                temperature=0.7,
+                timeout=settings.LLM_TIMEOUT,
+            )
+        return self._sonar_model
+
+    def get_case_answer_chain(self):
+        if self._case_answer_chain is None:
+            prompt = ChatPromptTemplate.from_messages([
+                SystemMessagePromptTemplate.from_template(SYSTEM_PROMPT),
+                HumanMessagePromptTemplate.from_template(
+                    "OTÁZKA: {question}\n\nROZHODNUTÍ:\n{context}\n\nOdpovězte s citacemi:"
+                ),
+            ])
+            self._case_answer_chain = prompt | self.gpt_model | StrOutputParser()
+        return self._case_answer_chain
+
+    def get_query_generation_chain(self):
+        if self._query_generation_chain is None:
+            prompt = ChatPromptTemplate.from_messages([
+                SystemMessagePromptTemplate.from_template(QUERY_GENERATION_PROMPT),
+                HumanMessagePromptTemplate.from_template("{question}"),
+            ])
+            query_model = ChatOpenAI(
+                model=settings.LLM_MODEL,
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url=settings.OPENROUTER_BASE_URL,
+                temperature=0.5,
+                max_tokens=2000,
+                timeout=60.0,
+                extra_body={"provider": {"order": ["Azure"], "allow_fallbacks": False}},
+            )
+            self._query_generation_chain = prompt | query_model | StrOutputParser()
+        return self._query_generation_chain
+
+    def get_summary_chain(self):
+        if self._summary_chain is None:
+            prompt = ChatPromptTemplate.from_messages([
+                SystemMessagePromptTemplate.from_template(SUMMARY_PROMPT),
+                HumanMessagePromptTemplate.from_template(
+                    "OTÁZKA: {question}\nWEB: {web_answer}\nJUDIKATURA: {case_answer}"
+                ),
+            ])
+            self._summary_chain = prompt | self.gpt_model | StrOutputParser()
+        return self._summary_chain
+
+    async def generate_search_queries(self, question: str, num_queries: int = 2) -> list[str]:
+        try:
+            chain = self.get_query_generation_chain()
+            generated_text = await chain.ainvoke({"question": question})
+
+            queries = [
+                q.strip()
+                for q in generated_text.split("\n")
+                if q.strip() and not q.strip().startswith(("1.", "2.", "3.", "-", "*"))
+            ]
+            queries = queries[:num_queries]
+
+            validated = [q for q in queries if 2 <= len(q.split()) <= 12]
+            if not validated:
+                validated = [question]
+
+            final = [question]
+            for q in validated:
+                if q != question and len(final) < num_queries:
+                    final.append(q)
+
+            print(f"✅ Generated {len(final)} search queries")
+            return final
+        except Exception as e:
+            print(f"❌ Query generation error: {e}")
+            return [question]
+
+    async def answer_based_on_cases(self, question: str, cases: list[CaseResult]) -> str:
+        try:
+            context = format_cases_for_context(cases)
+            print(f"📤 Passing {len(cases)} cases to GPT ({len(context)} chars)")
+
+            chain = self.get_case_answer_chain()
+            answer = await chain.ainvoke({"question": question, "context": context})
+
+            print(f"✅ GPT response: {len(answer)} chars")
+            return answer
+        except Exception as e:
+            print(f"❌ Answer generation error: {e}")
+            return ""
+
+    async def answer_based_on_cases_stream(
+        self, question: str, cases: list[CaseResult]
+    ) -> AsyncIterator[str]:
+        try:
+            context = format_cases_for_context(cases)
+            print(f"📤 Streaming {len(cases)} cases to GPT")
+
+            chain = self.get_case_answer_chain()
+            async for chunk in chain.astream({"question": question, "context": context}):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            print(f"❌ Streaming error: {e}")
+
+    async def get_sonar_answer(self, question: str) -> tuple[str, list[str]]:
+        try:
+            messages = [SystemMessage(content=SONAR_PROMPT), HumanMessage(content=question)]
+            response = await self.sonar_model.ainvoke(messages)
+
             citations = []
+            if hasattr(response, "response_metadata"):
+                metadata = response.response_metadata
+                citations = metadata.get("citations", [])
 
-        # Final yield with complete answer and citations
-        yield None, full_answer, citations
+            return response.content or "", citations
+        except Exception as e:
+            print(f"❌ Sonar error: {e}")
+            return "", []
 
-    except Exception as e:
-        print(f"Chyba pri ziskani Sonar odpovedi: {str(e)}")
-        yield None, "", []
+    async def get_sonar_answer_stream(self, question: str):
+        try:
+            messages = [SystemMessage(content=SONAR_PROMPT), HumanMessage(content=question)]
+            full_answer = ""
 
+            async for chunk in self.sonar_model.astream(messages):
+                if chunk.content:
+                    full_answer += chunk.content
+                    yield chunk.content, None, None
 
-async def answer_based_on_cases(
-    question: str, cases: list[CaseResult], client: OpenAI
-) -> str:
-    """
-    GPT answers the question based on FULL case data with citations
-    NO TRUNCATION - All context is passed to GPT
-    """
-    try:
-        # Format cases with FULL context - NO TRUNCATION
-        cases_context = format_cases_for_context(cases)
-        
-        print(f"\n{'='*80}")
-        print(f"📤 PASSING FULL CONTEXT TO GPT")
-        print(f"{'='*80}")
-        print(f"Number of cases: {len(cases)}")
-        print(f"Context length: {len(cases_context)} characters")
-        print(f"Context length: {len(cases_context.split())} words")
-        print(f"Estimated tokens: ~{len(cases_context) // 4}")
-        print(f"{'='*80}\n")
+            # Get citations separately
+            try:
+                response = await self.sonar_model.ainvoke(messages)
+                citations = []
+                if hasattr(response, "response_metadata"):
+                    citations = response.response_metadata.get("citations", [])
+            except Exception:
+                citations = []
 
-        user_prompt = f"""OTÁZKA UŽIVATELE:
-{question}
+            yield None, full_answer, citations
+        except Exception as e:
+            print(f"❌ Sonar streaming error: {e}")
+            yield None, "", []
 
-POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
-{cases_context}
-
-ÚKOL:
-1. Přečtěte si text každého rozhodnutí (část "PŘEDMĚT SPORU")
-2. Extrahujte DOSLOVNÉ CITACE z textu, které odpovídají na otázku
-3. Vysvětlete PROČ soud rozhodl tak, jak rozhodl
-4. Napište přirozenou odpověď s inline citacemi [^1], [^2]
-
-PŘÍKLAD DOBRÉ ODPOVĚDI:
-"Podle rozhodnutí [^1] musí dohoda obsahovat konkrétní úpravu výživného. Soud uvedl, že 'neurčitá formulace není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb'. V případě [^2] soud odmítl dohodu, protože 'zákon vyžaduje jasné vymezení práv a povinností obou rodičů'."
-
-DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
-
-        response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=4000,
-            extra_body={
-                "provider": {
-                    "order": ["Azure"],
-                    "allow_fallbacks": False
-                }
-            }
-        )
-
-        answer = (response.choices[0].message.content or "").strip()
-        
-        print(f"✅ GPT response generated: {len(answer)} characters\n")
-        
-        return answer
-
-    except Exception as e:
-        print(f"❌ Chyba pri generovani odpovedi zalozene na pripadech: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return ""
+    async def generate_summary_stream(
+        self, question: str, web_answer: str, case_answer: str
+    ) -> AsyncIterator[str]:
+        try:
+            chain = self.get_summary_chain()
+            async for chunk in chain.astream({
+                "question": question,
+                "web_answer": web_answer[:5000],
+                "case_answer": case_answer[:5000],
+            }):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            print(f"❌ Summary error: {e}")
 
 
-async def answer_based_on_cases_stream(
-    question: str, cases: list[CaseResult], client: OpenAI
-):
-    """
-    Stream GPT answer based on FULL case data - NO TRUNCATION
-    """
-    try:
-        print(f"\n{'='*80}")
-        print(f"📤 STREAMING FULL CONTEXT TO GPT")
-        print(f"{'='*80}")
-        print(f"Number of cases: {len(cases)}")
-        
-        # Format cases with FULL context - NO TRUNCATION
-        cases_context = format_cases_for_context(cases)
-        
-        print(f"Context length: {len(cases_context)} characters")
-        print(f"Context length: {len(cases_context.split())} words")
-        print(f"Estimated tokens: ~{len(cases_context) // 4}")
-        print(f"{'='*80}\n")
-
-        user_prompt = f"""OTÁZKA UŽIVATELE:
-{question}
-
-POSKYTNUTÁ SOUDNÍ ROZHODNUTÍ (KOMPLETNÍ KONTEXT):
-{cases_context}
-
-ÚKOL:
-1. Přečtěte si text každého rozhodnutí (část "PŘEDMĚT SPORU")
-2. Extrahujte DOSLOVNÉ CITACE z textu, které odpovídají na otázku
-3. Vysvětlete PROČ soud rozhodl tak, jak rozhodl
-4. Napište přirozenou odpověď s inline citacemi [^1], [^2]
-
-PŘÍKLAD DOBRÉ ODPOVĚDI:
-"Podle rozhodnutí [^1] musí dohoda obsahovat konkrétní úpravu výživného. Soud uvedl, že 'neurčitá formulace není dostačující, dohoda musí obsahovat přesnou částku a periodicitu plateb'. V případě [^2] soud odmítl dohodu, protože 'zákon vyžaduje jasné vymezení práv a povinností obou rodičů'."
-
-DŮLEŽITÉ: Citujte DOSLOVNĚ z textu rozhodnutí. Pokud v textu není dostatek detailů, řekněte to."""
-
-        print(f"🤖 Starting OpenAI streaming...")
-        stream = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=4000,
-            stream=True,
-            extra_body={
-                "provider": {
-                    "order": ["Azure"],
-                    "allow_fallbacks": False
-                }
-            }
-        )
-
-        chunk_count = 0
-        total_chunks_received = 0
-        reasoning_chunks = 0
-        
-        for chunk in stream:
-            total_chunks_received += 1
-            
-            # GPT-5 reasoning tokens - skip them (not visible content)
-            if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
-                reasoning_chunks += 1
-                continue
-            
-            # Only yield actual content
-            if chunk.choices[0].delta.content:
-                chunk_count += 1
-                content = chunk.choices[0].delta.content
-                yield content
-        
-        print(f"✅ Yielded {chunk_count} content chunks")
-        print(f"📊 Total chunks received: {total_chunks_received}")
-        if reasoning_chunks > 0:
-            print(f"🧠 Reasoning chunks (GPT-5 thinking): {reasoning_chunks}")
-        
-        if chunk_count == 0:
-            print("⚠️ WARNING: OpenAI returned 0 content chunks!")
-            if total_chunks_received > 0:
-                print(f"   Received {total_chunks_received} total chunks ({reasoning_chunks} reasoning)")
-                print(f"   ⚠️ GPT-5 may have exhausted tokens on reasoning phase!")
-                print(f"   💡 Try increasing max_tokens or reducing context size")
-
-    except Exception as e:
-        print(f"❌ Chyba pri streamovani odpovedi: {str(e)}")
-        import traceback
-        traceback.print_exc()
-
-
-
-async def generate_combined_summary_stream(
-    question: str,
-    web_answer: str,
-    case_answer: str,
-    client: OpenAI
-):
-    """
-    Generate a concise summary combining web and case search results
-    """
-    try:
-        summary_prompt = """Jste právní expert. Máte k dispozici dvě odpovědi na stejnou otázku:
-1. Odpověď z webového vyhledávání (aktuální právní informace)
-2. Odpověď založená na soudních rozhodnutích (judikatura)
-
-Vytvořte KRÁTKÉ shrnutí (2-3 věty), které:
-- Syntetizuje obě odpovědi
-- Zdůrazní klíčové body
-- Ukáže, jak se webové informace a judikatura doplňují
-- Buďte stručný a jasný
-
-NEOPISUJTE celé odpovědi, pouze shrňte hlavní závěry."""
-
-        stream = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": summary_prompt},
-                {
-                    "role": "user",
-                    "content": f"""OTÁZKA:
-{question}
-
-WEBOVÁ ODPOVĚĎ:
-{web_answer[:5000]}
-
-ODPOVĚĎ ZE SOUDNÍCH ROZHODNUTÍ:
-{case_answer[:5000]}
-
-Vytvořte krátké shrnutí (2-3 věty):"""
-                }
-            ],
-            temperature=0.3,
-            max_tokens=2000,
-            stream=True,
-            extra_body={
-                "provider": {
-                    "order": ["Azure"],
-                    "allow_fallbacks": False
-                }
-            }
-        )
-
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-
-    except Exception as e:
-        print(f"Error generating summary: {str(e)}")
-        yield ""
+# Global instance
+llm_service = LLMService()

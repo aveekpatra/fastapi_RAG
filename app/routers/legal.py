@@ -1,273 +1,142 @@
+"""
+Legal Search Router - Original endpoints (backward compatible)
+Uses general_courts collection by default
+"""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.models import (
-    CaseSearchResponse,
-    CombinedSearchResponse,
-    QueryRequest,
-    WebSearchResponse,
-)
+from app.models import CaseSearchResponse, CombinedSearchResponse, QueryRequest, WebSearchResponse
 from app.security import verify_api_key, verify_api_key_query
-from app.services.llm import (
-    answer_based_on_cases,
-    answer_based_on_cases_stream,
-    get_openai_client,
-    get_sonar_answer,
-    get_sonar_answer_stream,
-)
-from app.services.qdrant import get_cases_from_qdrant
+from app.services.llm import llm_service
+from app.services.multi_source_search import DataSource, multi_source_engine
 
 router = APIRouter(tags=["search"])
 
 
-# Web Search (Sonar) Only Endpoints
 @router.post("/web-search", response_model=WebSearchResponse)
-async def web_search(
-    request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)
-):
-    """
-    Web search using Perplexity Sonar only
-    Returns answer with citations but no case information
-    """
+async def web_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
+    """Web search using Perplexity Sonar only"""
     try:
-        answer, citations = await get_sonar_answer(request.question)
-
-        return WebSearchResponse(
-            answer=answer,
-            source="Perplexity Sonar via OpenRouter",
-            citations=citations,
-        )
+        answer, citations = await llm_service.get_sonar_answer(request.question)
+        return WebSearchResponse(answer=answer, source="Perplexity Sonar via OpenRouter", citations=citations)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/web-search-stream")
 async def web_search_stream(
-    question: str = Query(..., description="Legal question to search"),
+    question: str = Query(..., description="Legal question"),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
-    """
-    Streaming web search using Perplexity Sonar only
-    """
+    """Streaming web search using Perplexity Sonar"""
 
     async def generate():
         try:
             yield 'data: {"type": "web_search_start"}\n\n'
-
-            # Stream Sonar response directly
-            sonar_stream = get_sonar_answer_stream(question)
-            async for chunk_text, final_answer, citations in sonar_stream:
+            async for chunk_text, final_answer, citations in llm_service.get_sonar_answer_stream(question):
                 if chunk_text:
-                    # Stream individual chunk
-                    data = {
-                        "type": "web_answer_chunk",
-                        "content": chunk_text,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk_text})}\n\n"
                 elif final_answer is not None:
-                    # Final chunk with complete answer and citations
                     if citations:
-                        yield f"data: {
-                            json.dumps(
-                                {'type': 'web_citations', 'citations': citations}
-                            )
-                        }\n\n"
+                        yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
                     break
-
             yield 'data: {"type": "web_search_end"}\n\n'
-
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-# Case Search (Qdrant + GPT) Only Endpoints
 @router.post("/case-search", response_model=CaseSearchResponse)
-async def case_search(
-    request: QueryRequest, 
-    api_key_valid: bool = Depends(verify_api_key),
-    use_improved_rag: bool = Query(
-        None, 
-        description="Use improved RAG pipeline (query generation + hybrid search). If not specified, uses config default."
-    )
-):
-    """
-    Case search using Qdrant + GPT only
-    Returns answer based on court cases without web search
-    
-    Supports two modes:
-    - Basic: Single vector search (original)
-    - Improved: Query generation + hybrid search + reranking (set use_improved_rag=true or USE_IMPROVED_RAG env var)
-    """
+async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
+    """Case search using Qdrant + GPT (general_courts collection)"""
     try:
-        client = get_openai_client()
-        
-        # Get supporting cases from Qdrant (with optional improved RAG)
-        supporting_cases = await get_cases_from_qdrant(
-            request.question, 
-            request.top_k,
-            use_improved_rag=use_improved_rag,
-            openai_client=client
+        queries = await llm_service.generate_search_queries(request.question, num_queries=2)
+        cases = await multi_source_engine.multi_query_search(
+            queries=queries,
+            source=DataSource.GENERAL_COURTS,
+            results_per_query=10,
+            final_limit=request.top_k,
         )
 
-        # Generate case-based answer
         answer = ""
-        filtered_cases = supporting_cases
-        if supporting_cases:
-            answer = await answer_based_on_cases(
-                request.question, supporting_cases, client
-            )
-            
-            # Check if GPT says cases are not relevant
+        filtered_cases = cases
+        if cases:
+            answer = await llm_service.answer_based_on_cases(request.question, cases)
             if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in answer or "žádné relevantní případy" in answer.lower():
-                # Cases are not relevant, return empty list
                 filtered_cases = []
 
-        return CaseSearchResponse(
-            answer=answer,
-            supporting_cases=filtered_cases,
-        )
+        return CaseSearchResponse(answer=answer, supporting_cases=filtered_cases)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/case-search-stream")
 async def case_search_stream(
-    question: str = Query(..., description="Legal question to search", min_length=3, max_length=5000),
-    top_k: int = Query(5, description="Number of cases to retrieve", ge=1, le=20),
-    use_improved_rag: bool = Query(
-        None, 
-        description="Use improved RAG pipeline (query generation + hybrid search)"
-    ),
+    question: str = Query(..., min_length=3, max_length=5000),
+    top_k: int = Query(5, ge=1, le=20),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
-    """
-    Streaming case search using Qdrant + GPT only
-    
-    Supports two modes:
-    - Basic: Single vector search (original)
-    - Improved: Query generation + hybrid search + reranking
-    """
+    """Streaming case search"""
 
     async def generate():
         try:
             yield 'data: {"type": "case_search_start"}\n\n'
-
-            client = get_openai_client()
-
             yield 'data: {"type": "cases_fetching"}\n\n'
 
-            supporting_cases = await get_cases_from_qdrant(
-                question, 
-                top_k,
-                use_improved_rag=use_improved_rag,
-                openai_client=client
+            queries = await llm_service.generate_search_queries(question, num_queries=2)
+            cases = await multi_source_engine.multi_query_search(
+                queries=queries,
+                source=DataSource.GENERAL_COURTS,
+                results_per_query=10,
+                final_limit=top_k,
             )
-
-            print(f"🔍 Found {len(supporting_cases)} cases for question: {question[:50]}...")
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
 
             full_answer = ""
-            if supporting_cases:
-                print(f"✅ Starting to stream answer for {len(supporting_cases)} cases")
-                chunk_count = 0
-                async for chunk in answer_based_on_cases_stream(
-                    question, supporting_cases, client
-                ):
-                    chunk_count += 1
+            if cases:
+                async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
                     full_answer += chunk
-                    data = {
-                        "type": "case_answer_chunk",
-                        "content": chunk,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-                print(f"✅ Streamed {chunk_count} chunks")
-            else:
-                print("⚠️ No supporting cases found, skipping answer generation")
+                    yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': chunk})}\n\n"
 
             yield 'data: {"type": "gpt_answer_end"}\n\n'
 
-            # Check if GPT says cases are not relevant
-            cases_are_relevant = True
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in full_answer or "žádné relevantní případy" in full_answer.lower():
-                cases_are_relevant = False
-                print("⚠️ GPT indicated cases are not relevant, hiding case list")
-
+            cases_relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in full_answer
             yield 'data: {"type": "cases_start"}\n\n'
 
-            # Only show cases if they are relevant
-            if cases_are_relevant:
-                for case in supporting_cases:
-                    case_data = {
-                        "type": "case",
-                        "case_number": case.case_number,
-                        "court": case.court,
-                        "judge": case.judge,
-                        "subject": case.subject,
-                        "date_issued": case.date_issued,
-                        "ecli": case.ecli,
-                        "keywords": case.keywords,
-                        "legal_references": case.legal_references,
-                        "relevance_score": round(case.relevance_score, 3),
-                        "source_url": case.source_url,
-                    }
-                    yield f"data: {json.dumps(case_data)}\n\n"
+            if cases_relevant:
+                for case in cases:
+                    yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': case.subject, 'date_issued': case.date_issued, 'ecli': case.ecli, 'keywords': case.keywords, 'legal_references': case.legal_references, 'relevance_score': round(case.relevance_score, 3), 'source_url': case.source_url})}\n\n"
 
             yield 'data: {"type": "case_search_end"}\n\n'
-
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-# Combined Search (Web + Case) Endpoints
 @router.post("/combined-search", response_model=CombinedSearchResponse)
-async def combined_search(
-    request: QueryRequest, 
-    api_key_valid: bool = Depends(verify_api_key),
-    use_improved_rag: bool = Query(
-        None, 
-        description="Use improved RAG pipeline for case search"
-    )
-):
-    """
-    Combined search using both web (Sonar) and case (Qdrant + GPT) sources
-    Returns answers from both sources with citations and case information
-    
-    Case search supports two modes:
-    - Basic: Single vector search (original)
-    - Improved: Query generation + hybrid search + reranking
-    """
+async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
+    """Combined search using web (Sonar) and case (Qdrant + GPT)"""
     try:
-        client = get_openai_client()
-        
-        # Get Sonar answer with citations
-        web_answer, web_citations = await get_sonar_answer(request.question)
+        web_answer, web_citations = await llm_service.get_sonar_answer(request.question)
 
-        # Get supporting cases from Qdrant (with optional improved RAG)
-        supporting_cases = await get_cases_from_qdrant(
-            request.question, 
-            request.top_k,
-            use_improved_rag=use_improved_rag,
-            openai_client=client
+        queries = await llm_service.generate_search_queries(request.question, num_queries=2)
+        cases = await multi_source_engine.multi_query_search(
+            queries=queries,
+            source=DataSource.GENERAL_COURTS,
+            results_per_query=10,
+            final_limit=request.top_k,
         )
 
-        # Generate case-based answer
         case_answer = ""
-        filtered_cases = supporting_cases
-        if supporting_cases:
-            case_answer = await answer_based_on_cases(
-                request.question, supporting_cases, client
-            )
-            
-            # Check if GPT says cases are not relevant
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer or "žádné relevantní případy" in case_answer.lower():
-                # Cases are not relevant, return empty list
+        filtered_cases = cases
+        if cases:
+            case_answer = await llm_service.answer_based_on_cases(request.question, cases)
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer:
                 filtered_cases = []
 
         return CombinedSearchResponse(
@@ -283,130 +152,61 @@ async def combined_search(
 
 @router.get("/combined-search-stream")
 async def combined_search_stream(
-    question: str = Query(..., description="Legal question to search"),
-    top_k: int = Query(5, description="Number of cases to retrieve"),
-    use_improved_rag: bool = Query(
-        None, 
-        description="Use improved RAG pipeline for case search"
-    ),
+    question: str = Query(...),
+    top_k: int = Query(5),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
-    """
-    Streaming combined search using both web (Sonar) and case (Qdrant + GPT) sources
-    
-    Case search supports two modes:
-    - Basic: Single vector search (original)
-    - Improved: Query generation + hybrid search + reranking
-    """
+    """Streaming combined search"""
 
     async def generate():
         try:
-            client = get_openai_client()
-
-            # Store answers for summary
             web_answer_full = ""
             case_answer_full = ""
 
-            # Web Search Part
             yield 'data: {"type": "web_search_start"}\n\n'
-
-            # Stream Sonar response directly
-            sonar_stream = get_sonar_answer_stream(question)
-            async for chunk_text, final_answer, web_citations in sonar_stream:
+            async for chunk_text, final_answer, citations in llm_service.get_sonar_answer_stream(question):
                 if chunk_text:
                     web_answer_full += chunk_text
-                    # Stream individual chunk
-                    data = {
-                        "type": "web_answer_chunk",
-                        "content": chunk_text,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk_text})}\n\n"
                 elif final_answer is not None:
                     web_answer_full = final_answer
-                    # Final chunk with complete answer and citations
-                    if web_citations:
-                        yield f"data: {
-                            json.dumps(
-                                {'type': 'web_citations', 'citations': web_citations}
-                            )
-                        }\n\n"
+                    if citations:
+                        yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
                     break
-
             yield 'data: {"type": "web_search_end"}\n\n'
 
-            # Case Search Part
             yield 'data: {"type": "case_search_start"}\n\n'
-
             yield 'data: {"type": "cases_fetching"}\n\n'
 
-            supporting_cases = await get_cases_from_qdrant(
-                question, 
-                top_k,
-                use_improved_rag=use_improved_rag,
-                openai_client=client
+            queries = await llm_service.generate_search_queries(question, num_queries=2)
+            cases = await multi_source_engine.multi_query_search(
+                queries=queries,
+                source=DataSource.GENERAL_COURTS,
+                results_per_query=10,
+                final_limit=top_k,
             )
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
-
-            if supporting_cases:
-                async for chunk in answer_based_on_cases_stream(
-                    question, supporting_cases, client
-                ):
+            if cases:
+                async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
                     case_answer_full += chunk
-                    data = {
-                        "type": "case_answer_chunk",
-                        "content": chunk,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-
+                    yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': chunk})}\n\n"
             yield 'data: {"type": "gpt_answer_end"}\n\n'
 
-            # Check if GPT says cases are not relevant
-            cases_are_relevant = True
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer_full or "žádné relevantní případy" in case_answer_full.lower():
-                cases_are_relevant = False
-                print("⚠️ GPT indicated cases are not relevant, hiding case list")
-
+            cases_relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_answer_full
             yield 'data: {"type": "cases_start"}\n\n'
-
-            # Only show cases if they are relevant
-            if cases_are_relevant:
-                for case in supporting_cases:
-                    case_data = {
-                        "type": "case",
-                        "case_number": case.case_number,
-                        "court": case.court,
-                        "judge": case.judge,
-                        "subject": case.subject,
-                        "date_issued": case.date_issued,
-                        "ecli": case.ecli,
-                        "keywords": case.keywords,
-                        "legal_references": case.legal_references,
-                        "relevance_score": round(case.relevance_score, 3),
-                        "source_url": case.source_url,
-                    }
-                    yield f"data: {json.dumps(case_data)}\n\n"
-
+            if cases_relevant:
+                for case in cases:
+                    yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': case.subject, 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'source_url': case.source_url})}\n\n"
             yield 'data: {"type": "case_search_end"}\n\n'
 
-            # Generate combined summary
             if web_answer_full and case_answer_full:
                 yield 'data: {"type": "summary_start"}\n\n'
-                
-                from app.services.llm import generate_combined_summary_stream
-                async for summary_chunk in generate_combined_summary_stream(
-                    question, web_answer_full, case_answer_full, client
-                ):
-                    data = {
-                        "type": "summary_chunk",
-                        "content": summary_chunk,
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
-                
+                async for chunk in llm_service.generate_summary_stream(question, web_answer_full, case_answer_full):
+                    yield f"data: {json.dumps({'type': 'summary_chunk', 'content': chunk})}\n\n"
                 yield 'data: {"type": "summary_end"}\n\n'
 
             yield 'data: {"type": "combined_search_end"}\n\n'
-
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
