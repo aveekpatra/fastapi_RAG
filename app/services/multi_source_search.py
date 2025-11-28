@@ -46,7 +46,18 @@ class CollectionConfig:
 
 
 def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
-    """Get collection configurations - 3 main courts use Seznam model"""
+    """
+    Get collection configurations - 3 main courts use Seznam model
+    
+    Data structure from vectorize scripts:
+    - case_number: case identifier
+    - date: date field
+    - chunk_text: chunk content
+    - full_text: full text (only on chunk_index=0)
+    - chunk_index, total_chunks, filename
+    - source: only in supreme_court (e.g., "SupCo")
+    - NO court field in payload - use display_name
+    """
     return {
         DataSource.CONSTITUTIONAL_COURT: CollectionConfig(
             name=settings.QDRANT_CONSTITUTIONAL_COURT,
@@ -56,7 +67,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             description="Nálezy a usnesení Ústavního soudu ČR (510k+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
-            court_field="court",
+            court_field="court",  # Not in payload, will use display_name
             date_field="date",
             uses_chunking=True,
             chunk_text_field="chunk_text",
@@ -70,7 +81,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             description="Rozhodnutí Nejvyššího soudu ČR (1.1M+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
-            court_field="court",
+            court_field="source",  # Supreme court has 'source' field
             date_field="date",
             uses_chunking=True,
             chunk_text_field="chunk_text",
@@ -84,7 +95,7 @@ def get_collection_configs() -> Dict[DataSource, CollectionConfig]:
             description="Rozhodnutí Nejvyššího správního soudu ČR (695k+ dokumentů)",
             case_number_field="case_number",
             text_field="chunk_text",
-            court_field="court",
+            court_field="court",  # Not in payload, will use display_name
             date_field="date",
             uses_chunking=True,
             chunk_text_field="chunk_text",
@@ -237,14 +248,13 @@ class MultiSourceSearchEngine:
                 print(f"⚠️ Error from {source.value}: {results}")
                 continue
             if results:
-                config = get_configs()[source]
+                source_config = get_configs()[source]
                 for r in results:
-                    # Tag with source court
-                    if config.display_name not in (r.court or ""):
-                        r.court = f"{r.court or 'N/A'} ({config.display_name})"
+                    # Tag with data source
                     r.data_source = source.value
+                    # Court is already set from _convert_results (uses display_name)
                 merged.extend(results)
-                print(f"   ✓ {config.display_name}: {len(results)} results")
+                print(f"   ✓ {source_config.display_name}: {len(results)} results")
         
         # Sort by score
         merged.sort(key=lambda x: x.relevance_score, reverse=True)
@@ -310,20 +320,32 @@ class MultiSourceSearchEngine:
         return []
     
     def _convert_results(self, results: List[Dict], config: CollectionConfig) -> List[CaseResult]:
-        """Convert Qdrant results to CaseResult"""
+        """
+        Convert Qdrant results to CaseResult
+        
+        Handles different payload structures:
+        - New courts: case_number, date, chunk_text, full_text (no court field)
+        - Supreme court: has 'source' field
+        - Legacy: case_number, subject, court, date_issued
+        """
         cases = []
         for result in results:
             payload = result.get("payload", {})
             score = result.get("score", 0.0)
             
+            # Get text content
             if config.uses_chunking:
+                # Prefer full_text if available (chunk_index=0), else chunk_text
                 subject = payload.get(config.full_text_field) or payload.get(config.chunk_text_field, "")
             else:
                 subject = payload.get(config.text_field, "")
             
+            # Get court name - use display_name as fallback (new collections don't have court field)
+            court = payload.get(config.court_field) or config.display_name
+            
             cases.append(CaseResult(
                 case_number=payload.get(config.case_number_field, "N/A"),
-                court=payload.get(config.court_field, config.display_name),
+                court=court,
                 judge=payload.get("judge"),
                 subject=subject,
                 date_issued=payload.get(config.date_field),
