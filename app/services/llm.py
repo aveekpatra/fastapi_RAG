@@ -41,12 +41,14 @@ VYHÝBEJTE SE citacím soudních rozhodnutí."""
 
 QUERY_GENERATION_PROMPT = """Vygenerujte 3-5 optimalizovaných vyhledávacích dotazů pro právní databázi.
 
-PRAVIDLA:
-- Zachovejte původní význam
+KRITICKÁ PRAVIDLA:
+- Vygenerujte POUZE vyhledávací dotazy, ŽÁDNÝ další text
 - Max 10 slov na dotaz
 - Používejte právní terminologii
 - Různé formulace stejného problému
 - Jeden dotaz na řádek, bez číslování
+- NEPOUŽÍVEJTE žádné značky jako "===", "KONVERZACE", nebo jiné formátování
+- POUZE čisté vyhledávací dotazy
 
 OTÁZKA: {question}
 
@@ -153,6 +155,11 @@ class LLMService:
         Always includes the original question.
         """
         try:
+            print(f"🔍 Query generation input:")
+            print(f"   Question type: {type(question)}")
+            print(f"   Question length: {len(question)} chars")
+            print(f"   Question: {question[:200]}{'...' if len(question) > 200 else ''}")
+            
             chain = self._get_query_chain()
             result = await chain.ainvoke({"question": question})
 
@@ -173,7 +180,7 @@ class LLMService:
 
             print(f"✅ Generated {len(final)} queries (GPT-5-nano)")
             for i, q in enumerate(final):
-                print(f"   [{i+1}] {q[:60]}{'...' if len(q) > 60 else ''}")
+                print(f"Query: {q}")
             return final
         except Exception as e:
             print(f"❌ Query generation error: {e}")

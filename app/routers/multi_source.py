@@ -87,6 +87,11 @@ async def case_search_stream(
         try:
             internal_source = _convert_source(source)
             
+            print(f"\n🎯 case-search-stream endpoint called")
+            print(f"   Question received: {question[:200]}{'...' if len(question) > 200 else ''}")
+            print(f"   Question length: {len(question)} chars")
+            print(f"   Source: {source.value}")
+            
             yield f'data: {json.dumps({"type": "search_start", "source": source.value})}\n\n'
             yield 'data: {"type": "generating_queries"}\n\n'
 
