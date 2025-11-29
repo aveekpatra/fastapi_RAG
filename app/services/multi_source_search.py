@@ -286,8 +286,9 @@ class MultiSourceSearchEngine:
         Pipeline:
         1. Vector search (parallel across courts)
         2. Deduplicate and aggregate
-        3. Entity boosting
-        4. LLM reranking (optional)
+        3. Fetch full text from chunk 0 for each case
+        4. Entity boosting
+        5. LLM reranking (optional)
         """
         print(f"\n{'='*60}")
         print(f"🎯 SEARCH: {source.value}")
@@ -313,8 +314,12 @@ class MultiSourceSearchEngine:
         aggregated = aggregate_chunk_scores(raw_results, top_k=limit * 3)
         print(f"📊 After aggregation: {len(aggregated)}")
         
+        # Fetch full text from chunk 0 for each case
+        enriched = await self._enrich_with_full_text(aggregated, source)
+        print(f"📊 After enrichment: {len(enriched)} cases with full text")
+        
         # Entity boosting
-        boosted = boost_by_entity_match(aggregated, entities)
+        boosted = boost_by_entity_match(enriched, entities)
         
         # Filter by relevance
         filtered = [r for r in boosted if r.relevance_score >= settings.MIN_RELEVANCE_SCORE]
@@ -499,6 +504,85 @@ class MultiSourceSearchEngine:
         result.sort(key=lambda x: x.relevance_score, reverse=True)
         return result[:limit]
     
+    async def _enrich_with_full_text(
+        self, cases: List[CaseResult], source: DataSource
+    ) -> List[CaseResult]:
+        """
+        Fetch full text for each case
+        
+        Handles two collection types:
+        1. Chunked collections (3 courts): full_text is in chunk_index=0
+        2. Legacy collection (czech_court_decisions_rag): full_text is in payload directly
+        
+        This ensures we have complete document text for better LLM analysis.
+        """
+        if source == DataSource.ALL_COURTS:
+            # Group cases by source court
+            cases_by_source: Dict[DataSource, List[CaseResult]] = {}
+            for case in cases:
+                src = DataSource(case.data_source) if case.data_source else DataSource.SUPREME_COURT
+                if src not in cases_by_source:
+                    cases_by_source[src] = []
+                cases_by_source[src].append(case)
+            
+            # Enrich each group
+            enriched = []
+            for src, src_cases in cases_by_source.items():
+                enriched.extend(await self._enrich_with_full_text(src_cases, src))
+            return enriched
+        
+        config = get_configs().get(source)
+        if not config:
+            return cases
+        
+        # Legacy collection (czech_court_decisions_rag) - no chunking, already has full_text
+        if not config.uses_chunking:
+            return cases
+        
+        # Chunked collections - need to fetch chunk 0
+        client = await self._get_client()
+        enriched_cases = []
+        
+        for case in cases:
+            try:
+                # Query for chunk 0 of this case
+                response = await client.post(
+                    f"{self.qdrant_url}/collections/{config.name}/points/search",
+                    headers=self.headers,
+                    json={
+                        "filter": {
+                            "must": [
+                                {"key": "case_number", "match": {"value": case.case_number}},
+                                {"key": "chunk_index", "match": {"value": 0}},
+                            ]
+                        },
+                        "limit": 1,
+                        "with_payload": True,
+                    },
+                    timeout=30,
+                )
+                
+                if response.status_code == 200:
+                    results = response.json().get('result', [])
+                    if results:
+                        payload = results[0].get("payload", {})
+                        full_text = payload.get(config.full_text_field, "")
+                        if full_text:
+                            case.subject = full_text
+                            print(f"   ✓ Fetched full text for {case.case_number}")
+                        else:
+                            print(f"   ⚠️ No full_text in chunk 0 for {case.case_number}")
+                    else:
+                        print(f"   ⚠️ Chunk 0 not found for {case.case_number}")
+                else:
+                    print(f"   ⚠️ Failed to fetch chunk 0 for {case.case_number}")
+            except Exception as e:
+                print(f"   ⚠️ Error fetching full text for {case.case_number}: {e}")
+            
+            enriched_cases.append(case)
+        
+        return enriched_cases
+    
     def _deduplicate_results(self, cases: List[CaseResult]) -> List[CaseResult]:
         """Deduplicate across sources"""
         seen: Dict[str, CaseResult] = {}
@@ -621,9 +705,12 @@ class MultiSourceSearchEngine:
         
         merged.sort(key=lambda x: (x[0], x[1]), reverse=True)
         
-        # Apply entity boosting
+        # Extract cases and enrich with full text
         final_cases = [case for _, _, case in merged[:final_limit * 2]]
-        boosted = boost_by_entity_match(final_cases, entities)
+        enriched = await self._enrich_with_full_text(final_cases, source)
+        
+        # Apply entity boosting
+        boosted = boost_by_entity_match(enriched, entities)
         
         print(f"✅ RRF merged: {len(case_scores)} unique → {len(boosted[:final_limit])} final")
         return boosted[:final_limit]
