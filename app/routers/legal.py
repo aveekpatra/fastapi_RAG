@@ -1,5 +1,5 @@
 """
-Legal Search Router - Original endpoints (backward compatible)
+Legal Search Router - Legacy endpoints (backward compatible)
 Uses general_courts collection by default
 """
 import json
@@ -17,28 +17,28 @@ router = APIRouter(tags=["search"])
 
 @router.post("/web-search", response_model=WebSearchResponse)
 async def web_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
-    """Web search using Perplexity Sonar only"""
+    """Web search using Perplexity Sonar"""
     try:
         answer, citations = await llm_service.get_sonar_answer(request.question)
-        return WebSearchResponse(answer=answer, source="Perplexity Sonar via OpenRouter", citations=citations)
+        return WebSearchResponse(answer=answer, source="Perplexity Sonar", citations=citations)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/web-search-stream")
 async def web_search_stream(
-    question: str = Query(..., description="Legal question"),
+    question: str = Query(...),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
-    """Streaming web search using Perplexity Sonar"""
+    """Streaming web search"""
 
     async def generate():
         try:
             yield 'data: {"type": "web_search_start"}\n\n'
-            async for chunk_text, final_answer, citations in llm_service.get_sonar_answer_stream(question):
-                if chunk_text:
-                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk_text})}\n\n"
-                elif final_answer is not None:
+            async for chunk, final, citations in llm_service.get_sonar_answer_stream(question):
+                if chunk:
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk})}\n\n"
+                elif final is not None:
                     if citations:
                         yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
                     break
@@ -51,25 +51,14 @@ async def web_search_stream(
 
 @router.post("/case-search", response_model=CaseSearchResponse)
 async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
-    """Case search using Qdrant + GPT (general_courts collection)"""
+    """Case search using legacy collection"""
     try:
         queries = await llm_service.generate_search_queries(request.question, num_queries=2)
-        cases = await multi_source_engine.multi_query_search(
-            queries=queries,
-            source=DataSource.GENERAL_COURTS,
-            results_per_query=10,
-            final_limit=request.top_k,
-            original_query=request.question,  # For entity extraction
-        )
-
-        answer = ""
-        filtered_cases = cases
-        if cases:
-            answer = await llm_service.answer_based_on_cases(request.question, cases)
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in answer or "žádné relevantní případy" in answer.lower():
-                filtered_cases = []
-
-        return CaseSearchResponse(answer=answer, supporting_cases=filtered_cases)
+        cases = await multi_source_engine.search(queries, DataSource.GENERAL_COURTS, limit=10)
+        relevant = await llm_service.filter_relevant_cases(request.question, cases, max_cases=request.top_k)
+        answer = await llm_service.answer_based_on_cases(request.question, relevant)
+        
+        return CaseSearchResponse(answer=answer, supporting_cases=relevant)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -85,34 +74,28 @@ async def case_search_stream(
     async def generate():
         try:
             yield 'data: {"type": "case_search_start"}\n\n'
-            yield 'data: {"type": "cases_fetching"}\n\n'
-
+            
             queries = await llm_service.generate_search_queries(question, num_queries=2)
-            cases = await multi_source_engine.multi_query_search(
-                queries=queries,
-                source=DataSource.GENERAL_COURTS,
-                results_per_query=10,
-                final_limit=top_k,
-                original_query=question,  # For entity extraction
-            )
-
+            cases = await multi_source_engine.search(queries, DataSource.GENERAL_COURTS, limit=10)
+            relevant = await llm_service.filter_relevant_cases(question, cases, max_cases=top_k)
+            
             yield 'data: {"type": "gpt_answer_start"}\n\n'
-
+            
             full_answer = ""
-            if cases:
-                async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
+            if relevant:
+                async for chunk in llm_service.answer_based_on_cases_stream(question, relevant):
                     full_answer += chunk
                     yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': chunk})}\n\n"
-
+            else:
+                no_answer = "Nemám odpověď na tuto otázku."
+                yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': no_answer})}\n\n"
+            
             yield 'data: {"type": "gpt_answer_end"}\n\n'
-
-            cases_relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in full_answer
+            
             yield 'data: {"type": "cases_start"}\n\n'
-
-            if cases_relevant:
-                for case in cases:
-                    yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': case.subject, 'date_issued': case.date_issued, 'ecli': case.ecli, 'keywords': case.keywords, 'legal_references': case.legal_references, 'relevance_score': round(case.relevance_score, 3), 'source_url': case.source_url})}\n\n"
-
+            for case in relevant:
+                yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': case.subject, 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'source_url': case.source_url})}\n\n"
+            
             yield 'data: {"type": "case_search_end"}\n\n'
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -122,32 +105,21 @@ async def case_search_stream(
 
 @router.post("/combined-search", response_model=CombinedSearchResponse)
 async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
-    """Combined search using web (Sonar) and case (Qdrant + GPT)"""
+    """Combined web + case search"""
     try:
         web_answer, web_citations = await llm_service.get_sonar_answer(request.question)
-
+        
         queries = await llm_service.generate_search_queries(request.question, num_queries=2)
-        cases = await multi_source_engine.multi_query_search(
-            queries=queries,
-            source=DataSource.GENERAL_COURTS,
-            results_per_query=10,
-            final_limit=request.top_k,
-            original_query=request.question,  # For entity extraction
-        )
-
-        case_answer = ""
-        filtered_cases = cases
-        if cases:
-            case_answer = await llm_service.answer_based_on_cases(request.question, cases)
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer:
-                filtered_cases = []
-
+        cases = await multi_source_engine.search(queries, DataSource.GENERAL_COURTS, limit=10)
+        relevant = await llm_service.filter_relevant_cases(request.question, cases, max_cases=request.top_k)
+        case_answer = await llm_service.answer_based_on_cases(request.question, relevant)
+        
         return CombinedSearchResponse(
             web_answer=web_answer,
-            web_source="Perplexity Sonar via OpenRouter",
+            web_source="Perplexity Sonar",
             web_citations=web_citations,
             case_answer=case_answer,
-            supporting_cases=filtered_cases,
+            supporting_cases=relevant,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -163,53 +135,46 @@ async def combined_search_stream(
 
     async def generate():
         try:
-            web_answer_full = ""
-            case_answer_full = ""
-
+            # Web search
             yield 'data: {"type": "web_search_start"}\n\n'
-            async for chunk_text, final_answer, citations in llm_service.get_sonar_answer_stream(question):
-                if chunk_text:
-                    web_answer_full += chunk_text
-                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk_text})}\n\n"
-                elif final_answer is not None:
-                    web_answer_full = final_answer
+            web_full = ""
+            async for chunk, final, citations in llm_service.get_sonar_answer_stream(question):
+                if chunk:
+                    web_full += chunk
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk})}\n\n"
+                elif final is not None:
+                    web_full = final
                     if citations:
                         yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
                     break
             yield 'data: {"type": "web_search_end"}\n\n'
-
+            
+            # Case search
             yield 'data: {"type": "case_search_start"}\n\n'
-            yield 'data: {"type": "cases_fetching"}\n\n'
-
             queries = await llm_service.generate_search_queries(question, num_queries=2)
-            cases = await multi_source_engine.multi_query_search(
-                queries=queries,
-                source=DataSource.GENERAL_COURTS,
-                results_per_query=10,
-                final_limit=top_k,
-                original_query=question,  # For entity extraction
-            )
-
+            cases = await multi_source_engine.search(queries, DataSource.GENERAL_COURTS, limit=10)
+            relevant = await llm_service.filter_relevant_cases(question, cases, max_cases=top_k)
+            
             yield 'data: {"type": "gpt_answer_start"}\n\n'
-            if cases:
-                async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
-                    case_answer_full += chunk
+            case_full = ""
+            if relevant:
+                async for chunk in llm_service.answer_based_on_cases_stream(question, relevant):
+                    case_full += chunk
                     yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': chunk})}\n\n"
             yield 'data: {"type": "gpt_answer_end"}\n\n'
-
-            cases_relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_answer_full
+            
             yield 'data: {"type": "cases_start"}\n\n'
-            if cases_relevant:
-                for case in cases:
-                    yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': case.subject, 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'source_url': case.source_url})}\n\n"
+            for case in relevant:
+                yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'relevance_score': round(case.relevance_score, 3)})}\n\n"
             yield 'data: {"type": "case_search_end"}\n\n'
-
-            if web_answer_full and case_answer_full:
+            
+            # Summary
+            if web_full and case_full:
                 yield 'data: {"type": "summary_start"}\n\n'
-                async for chunk in llm_service.generate_summary_stream(question, web_answer_full, case_answer_full):
+                async for chunk in llm_service.generate_summary_stream(question, web_full, case_full):
                     yield f"data: {json.dumps({'type': 'summary_chunk', 'content': chunk})}\n\n"
                 yield 'data: {"type": "summary_end"}\n\n'
-
+            
             yield 'data: {"type": "combined_search_end"}\n\n'
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
