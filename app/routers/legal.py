@@ -59,6 +59,7 @@ async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verif
             source=DataSource.GENERAL_COURTS,
             results_per_query=10,
             final_limit=request.top_k,
+            original_query=request.question,  # For entity extraction
         )
 
         answer = ""
@@ -92,6 +93,7 @@ async def case_search_stream(
                 source=DataSource.GENERAL_COURTS,
                 results_per_query=10,
                 final_limit=top_k,
+                original_query=question,  # For entity extraction
             )
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'
@@ -130,6 +132,7 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
             source=DataSource.GENERAL_COURTS,
             results_per_query=10,
             final_limit=request.top_k,
+            original_query=request.question,  # For entity extraction
         )
 
         case_answer = ""
@@ -184,6 +187,7 @@ async def combined_search_stream(
                 source=DataSource.GENERAL_COURTS,
                 results_per_query=10,
                 final_limit=top_k,
+                original_query=question,  # For entity extraction
             )
 
             yield 'data: {"type": "gpt_answer_start"}\n\n'

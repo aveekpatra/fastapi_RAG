@@ -29,14 +29,14 @@ KRITICKÁ PRAVIDLA:
 
 FORMÁT CITACÍ - VELMI DŮLEŽITÉ:
 Když citujete z rozhodnutí, použijte tento PŘESNÝ formát:
-> „přesná citace z rozhodnutí" [^číslo]
+> „přesná citace z rozhodnutí" [číslo]
 
 Příklad:
-> „Právnická osoba má právo na náhradu nemajetkové újmy při zásahu do její dobré pověsti." [^1]
+> „Právnická osoba má právo na náhradu nemajetkové újmy při zásahu do její dobré pověsti." [1]
 
 STRUKTURA ODPOVĚDI:
 1. Přímá odpověď na otázku
-2. Právní analýza s DOSLOVNÝMI citacemi ve formátu > „citace" [^číslo]
+2. Právní analýza s DOSLOVNÝMI citacemi ve formátu > „citace" [číslo]
 3. Na konci: **Podobné případy:** se seznamem citovaných rozhodnutí
 
 CO NEDĚLAT:

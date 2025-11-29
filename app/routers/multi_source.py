@@ -54,12 +54,13 @@ async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verif
         # Generate query variants for better recall
         queries = await llm_service.generate_search_queries(request.question, num_queries=3)
         
-        # Multi-query search with RRF fusion
+        # Multi-query search with RRF fusion + entity extraction
         cases = await multi_source_engine.multi_query_search(
             queries=queries,
             source=source,
             results_per_query=15,
             final_limit=request.top_k,
+            original_query=request.question,  # For entity extraction
         )
 
         # Generate answer
@@ -70,13 +71,14 @@ async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verif
             
             # Only return cited cases
             if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in answer:
-                # Extract citation numbers from the answer
-                citation_pattern = r'\[\^(\d+)\]'
+                # Extract citation numbers - support both [1] and [^1] formats
+                citation_patterns = [r'\[(\d+)\](?!\()', r'\[\^(\d+)\]']
                 cited_indices = set()
-                for match in re.finditer(citation_pattern, answer):
-                    index = int(match.group(1)) - 1
-                    if 0 <= index < len(cases):
-                        cited_indices.add(index)
+                for pattern in citation_patterns:
+                    for match in re.finditer(pattern, answer):
+                        index = int(match.group(1)) - 1
+                        if 0 <= index < len(cases):
+                            cited_indices.add(index)
                 
                 filtered_cases = [cases[i] for i in sorted(cited_indices)]
                 print(f"📋 Non-streaming: Returning {len(filtered_cases)} cited cases out of {len(cases)} total")
@@ -111,13 +113,14 @@ async def case_search_stream(
             queries = await llm_service.generate_search_queries(question, num_queries=2)
             yield f'data: {json.dumps({"type": "queries_generated", "count": len(queries)})}\n\n'
 
-            # Search
+            # Search with entity extraction
             yield 'data: {"type": "searching"}\n\n'
             cases = await multi_source_engine.multi_query_search(
                 queries=queries,
                 source=internal_source,
                 results_per_query=15,
                 final_limit=top_k,
+                original_query=question,  # For entity extraction
             )
             yield f'data: {json.dumps({"type": "cases_found", "count": len(cases)})}\n\n'
 
@@ -148,13 +151,14 @@ async def case_search_stream(
             yield 'data: {"type": "cases_start"}\n\n'
             
             if relevant and cases:
-                # Extract citation numbers from the answer (e.g., [^1], [^2], [^3])
-                citation_pattern = r'\[\^(\d+)\]'
+                # Extract citation numbers - support both [1] and [^1] formats
+                citation_patterns = [r'\[(\d+)\](?!\()', r'\[\^(\d+)\]']
                 cited_indices = set()
-                for match in re.finditer(citation_pattern, full_answer):
-                    index = int(match.group(1)) - 1  # Convert to 0-based index
-                    if 0 <= index < len(cases):
-                        cited_indices.add(index)
+                for pattern in citation_patterns:
+                    for match in re.finditer(pattern, full_answer):
+                        index = int(match.group(1)) - 1  # Convert to 0-based index
+                        if 0 <= index < len(cases):
+                            cited_indices.add(index)
                 
                 # Send only cases that were actually cited
                 cited_cases = [cases[i] for i in sorted(cited_indices)]
@@ -162,7 +166,7 @@ async def case_search_stream(
                 
                 for idx, case in enumerate(cited_cases):
                     # Find original index for citation reference
-                    original_idx = cases.index(case) + 1  # 1-based for [^1], [^2], etc.
+                    original_idx = cases.index(case) + 1  # 1-based for [1], [2], etc.
                     yield f"data: {json.dumps({'type': 'case', 'citation_index': original_idx, 'case_number': case.case_number, 'court': case.court, 'subject': (case.subject or '')[:500], 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'data_source': case.data_source, 'full_text': case.subject or ''})}\n\n"
 
             yield 'data: {"type": "search_complete"}\n\n'
@@ -183,7 +187,8 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
         
         queries = await llm_service.generate_search_queries(request.question, num_queries=3)
         case_task = multi_source_engine.multi_query_search(
-            queries=queries, source=source, results_per_query=15, final_limit=request.top_k
+            queries=queries, source=source, results_per_query=15, final_limit=request.top_k,
+            original_query=request.question,  # For entity extraction
         )
 
         web_result, cases = await asyncio.gather(web_task, case_task)
@@ -197,13 +202,14 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
             
             # Only return cited cases
             if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_answer:
-                # Extract citation numbers from the answer
-                citation_pattern = r'\[\^(\d+)\]'
+                # Extract citation numbers - support both [1] and [^1] formats
+                citation_patterns = [r'\[(\d+)\](?!\()', r'\[\^(\d+)\]']
                 cited_indices = set()
-                for match in re.finditer(citation_pattern, case_answer):
-                    index = int(match.group(1)) - 1
-                    if 0 <= index < len(cases):
-                        cited_indices.add(index)
+                for pattern in citation_patterns:
+                    for match in re.finditer(pattern, case_answer):
+                        index = int(match.group(1)) - 1
+                        if 0 <= index < len(cases):
+                            cited_indices.add(index)
                 
                 filtered_cases = [cases[i] for i in sorted(cited_indices)]
                 print(f"📋 Combined non-streaming: Returning {len(filtered_cases)} cited cases out of {len(cases)} total")
@@ -250,7 +256,8 @@ async def combined_search_stream(
             yield 'data: {"type": "case_search_start"}\n\n'
             queries = await llm_service.generate_search_queries(question, num_queries=3)
             cases = await multi_source_engine.multi_query_search(
-                queries=queries, source=internal_source, results_per_query=15, final_limit=top_k
+                queries=queries, source=internal_source, results_per_query=15, final_limit=top_k,
+                original_query=question,  # For entity extraction
             )
 
             case_full = ""
@@ -264,13 +271,14 @@ async def combined_search_stream(
             # Send only cited cases
             relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_full
             if relevant and cases:
-                # Extract citation numbers from the answer
-                citation_pattern = r'\[\^(\d+)\]'
+                # Extract citation numbers - support both [1] and [^1] formats
+                citation_patterns = [r'\[(\d+)\](?!\()', r'\[\^(\d+)\]']
                 cited_indices = set()
-                for match in re.finditer(citation_pattern, case_full):
-                    index = int(match.group(1)) - 1  # Convert to 0-based index
-                    if 0 <= index < len(cases):
-                        cited_indices.add(index)
+                for pattern in citation_patterns:
+                    for match in re.finditer(pattern, case_full):
+                        index = int(match.group(1)) - 1  # Convert to 0-based index
+                        if 0 <= index < len(cases):
+                            cited_indices.add(index)
                 
                 # Send only cases that were actually cited
                 cited_cases = [cases[i] for i in sorted(cited_indices)]

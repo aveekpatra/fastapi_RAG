@@ -69,6 +69,18 @@ class Settings:
     # Quality thresholds
     MIN_RELEVANCE_SCORE: float = 0.3  # Minimum score to include (cast wider net)
     HIGH_RELEVANCE_THRESHOLD: float = 0.7  # High confidence threshold
+    
+    # Enhanced search configuration
+    ENABLE_QUERY_EXPANSION: bool = os.getenv("ENABLE_QUERY_EXPANSION", "true").lower() == "true"
+    ENABLE_ENTITY_EXTRACTION: bool = os.getenv("ENABLE_ENTITY_EXTRACTION", "true").lower() == "true"
+    ENABLE_DOCUMENT_AGGREGATION: bool = os.getenv("ENABLE_DOCUMENT_AGGREGATION", "true").lower() == "true"
+    MAX_QUERY_EXPANSIONS: int = int(os.getenv("MAX_QUERY_EXPANSIONS", "2"))
+    ENTITY_BOOST_FACTOR: float = float(os.getenv("ENTITY_BOOST_FACTOR", "1.3"))
+    
+    # Hybrid search configuration (BM25 + Vector)
+    ENABLE_HYBRID_SEARCH: bool = os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true"
+    HYBRID_VECTOR_WEIGHT: float = float(os.getenv("HYBRID_VECTOR_WEIGHT", "0.6"))  # Semantic understanding
+    HYBRID_BM25_WEIGHT: float = float(os.getenv("HYBRID_BM25_WEIGHT", "0.4"))  # Keyword matching
 
     @property
     def qdrant_protocol(self) -> str:
