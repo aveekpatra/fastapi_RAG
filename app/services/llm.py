@@ -22,17 +22,20 @@ from app.utils.formatters import format_cases_for_context
 SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Analyzujte soudní rozhodnutí a odpovězte přirozeně s citacemi.
 
 PRAVIDLA:
-1. Používejte POUZE informace z poskytnutých rozhodnutí
-2. Citujte DOSLOVNĚ klíčové pasáže
-3. Pokud rozhodnutí NEJSOU relevantní: "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY"
-4. NIKDY nevymýšlejte informace
+1. Používejte informace z poskytnutých rozhodnutí
+2. Citujte klíčové pasáže pomocí [^1], [^2] atd.
+3. VŽDY se pokuste najít relevantní informace v rozhodnutích
+4. Pouze pokud rozhodnutí VŮBEC nesouvisí s tématem: "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY"
+5. NIKDY nevymýšlejte informace
 
 FORMÁT:
 - Přímá odpověď s inline citacemi [^1], [^2]
 - Konkrétní závěry z odůvodnění
 - Na konci: **Citované případy:** s odkazy
 
-Pište jako právník vysvětlující klientovi - konkrétně, s citacemi."""
+Pište jako právník vysvětlující klientovi - konkrétně, s citacemi.
+
+DŮLEŽITÉ: Pokud máte k dispozici rozhodnutí, VŽDY se pokuste z nich extrahovat užitečné informace. Odpovězte "žádné relevantní případy" POUZE pokud rozhodnutí absolutně nesouvisí s dotazem."""
 
 SONAR_PROMPT = """Jste právní expert na české právo a LEGISLATIVU. Odpovídejte na základě AKTUÁLNÍCH ZÁKONŮ.
 
@@ -225,11 +228,18 @@ class LLMService:
         try:
             context = format_cases_for_context(cases)
             print(f"📤 Streaming {len(cases)} cases (GPT-5-mini)")
+            print(f"📝 Question being sent to LLM: {question[:300]}...")
+            print(f"📊 Context length: {len(context):,} chars")
+            
+            # Debug: Show first case info
+            if cases:
+                print(f"📋 First case: {cases[0].case_number} - {(cases[0].subject or '')[:100]}...")
 
             chain = self._get_case_answer_chain()
             
             chunk_count = 0
             thinking_skipped = 0
+            full_answer = ""
             
             async for chunk in chain.astream({"question": question, "context": context}):
                 # GPT-5-mini may emit thinking/reasoning tokens - filter them
@@ -239,12 +249,18 @@ class LLMService:
                         thinking_skipped += 1
                         continue
                     chunk_count += 1
+                    full_answer += chunk
                     yield chunk
             
             if thinking_skipped:
                 print(f"✅ Streamed {chunk_count} chunks (filtered {thinking_skipped} thinking tokens)")
             else:
                 print(f"✅ Streamed {chunk_count} chunks")
+            
+            # Debug: Show answer summary
+            print(f"📝 Answer preview: {full_answer[:500]}...")
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in full_answer:
+                print(f"⚠️ LLM returned 'no relevant cases' despite having {len(cases)} cases!")
             
         except Exception as e:
             print(f"❌ Streaming error: {e}")

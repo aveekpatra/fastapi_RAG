@@ -112,15 +112,27 @@ async def case_search_stream(
             # Stream answer
             yield 'data: {"type": "generating_answer"}\n\n'
             full_answer = ""
+            print(f"\n🤖 Starting LLM answer generation")
+            print(f"   Question for LLM: {question[:200]}...")
+            print(f"   Cases to analyze: {len(cases)}")
+            
+            # Debug: Show first 3 cases
+            for i, c in enumerate(cases[:3]):
+                print(f"   Case {i+1}: {c.case_number} - {(c.subject or '')[:100]}...")
+            
             if cases:
                 async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
                     full_answer += chunk
                     yield f"data: {json.dumps({'type': 'answer_chunk', 'content': chunk})}\n\n"
-
+            
+            print(f"✅ LLM answer complete: {len(full_answer)} chars")
+            print(f"   Answer preview: {full_answer[:300]}...")
             yield 'data: {"type": "answer_complete"}\n\n'
 
             # Send cases
             relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in full_answer
+            print(f"📋 Cases relevant check: {relevant}")
+            print(f"   Contains 'ŽÁDNÉ RELEVANTNÍ': {'⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY' in full_answer}")
             yield 'data: {"type": "cases_start"}\n\n'
             
             if relevant:
