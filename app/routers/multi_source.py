@@ -95,8 +95,8 @@ async def case_search_stream(
             yield f'data: {json.dumps({"type": "search_start", "source": source.value})}\n\n'
             yield 'data: {"type": "generating_queries"}\n\n'
 
-            # Generate queries
-            queries = await llm_service.generate_search_queries(question, num_queries=3)
+            # Generate queries (reduced to 2 for faster search)
+            queries = await llm_service.generate_search_queries(question, num_queries=2)
             yield f'data: {json.dumps({"type": "queries_generated", "count": len(queries)})}\n\n'
 
             # Search

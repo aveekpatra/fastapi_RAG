@@ -162,6 +162,22 @@ class MultiSourceSearchEngine:
         self.headers = {"api-key": settings.QDRANT_API_KEY} if settings.QDRANT_API_KEY else {}
         self.max_retries = settings.QDRANT_MAX_RETRIES
         self.initial_timeout = settings.QDRANT_INITIAL_TIMEOUT
+        # Reusable HTTP client with connection pooling
+        self._client: Optional[httpx.AsyncClient] = None
+    
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create a reusable HTTP client with generous timeouts"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    timeout=self.initial_timeout,  # Total timeout
+                    connect=30.0,  # Connection timeout
+                    read=self.initial_timeout,  # Read timeout
+                    write=30.0,  # Write timeout
+                ),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
 
     async def orchestrated_search(
         self,
@@ -275,48 +291,57 @@ class MultiSourceSearchEngine:
     async def _execute_search_with_vector(
         self, source: DataSource, vector: List[float], limit: int
     ) -> List[CaseResult]:
-        """Execute search with pre-computed vector"""
+        """Execute search with pre-computed vector using connection pool"""
         configs = get_configs()
         config = configs.get(source)
         if not config:
             return []
         
+        client = await self._get_client()
+        
         for attempt in range(self.max_retries):
             try:
-                timeout = self.initial_timeout * (2 ** attempt)
+                # Use longer timeout for each retry attempt
+                timeout = self.initial_timeout + (attempt * 60)  # Add 60s per retry
                 
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(
-                        f"{self.qdrant_url}/collections/{config.name}/points/search",
-                        headers=self.headers,
-                        json={
-                            "vector": vector,
-                            "limit": limit * 2 if config.uses_chunking else limit,
-                            "with_payload": True,
-                        }
-                    )
+                response = await client.post(
+                    f"{self.qdrant_url}/collections/{config.name}/points/search",
+                    headers=self.headers,
+                    json={
+                        "vector": vector,
+                        "limit": limit * 2 if config.uses_chunking else limit,
+                        "with_payload": True,
+                    },
+                    timeout=timeout,
+                )
+                
+                if response.status_code == 200:
+                    results = response.json().get('result', [])
+                    cases = self._convert_results(results, config)
                     
-                    if response.status_code == 200:
-                        results = response.json().get('result', [])
-                        cases = self._convert_results(results, config)
-                        
-                        if config.uses_chunking:
-                            cases = self._deduplicate_chunks(cases, limit)
-                        
-                        return cases[:limit]
+                    if config.uses_chunking:
+                        cases = self._deduplicate_chunks(cases, limit)
                     
-                    if 400 <= response.status_code < 500:
-                        print(f"❌ Client error {response.status_code}: {response.text[:100]}")
-                        return []
+                    return cases[:limit]
+                
+                if 400 <= response.status_code < 500:
+                    print(f"❌ Client error {response.status_code}: {response.text[:100]}")
+                    return []
+                
+                # Server error - retry
+                print(f"⚠️ Server error {response.status_code} for {config.display_name}, retrying...")
                     
             except httpx.TimeoutException:
-                print(f"⏱️ Timeout attempt {attempt + 1}")
+                print(f"⏱️ Timeout {config.display_name} ({timeout}s) attempt {attempt + 1}/{self.max_retries}")
+            except httpx.ConnectError as e:
+                print(f"🔌 Connection error {config.display_name}: {e}")
             except Exception as e:
-                print(f"❌ Error attempt {attempt + 1}: {e}")
+                print(f"❌ Error {config.display_name} attempt {attempt + 1}: {type(e).__name__}: {e}")
             
             if attempt < self.max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2)  # Wait before retry
         
+        print(f"⚠️ All retries failed for {config.display_name}")
         return []
     
     def _convert_results(self, results: List[Dict], config: CollectionConfig) -> List[CaseResult]:
@@ -410,15 +435,75 @@ class MultiSourceSearchEngine:
         """
         Multi-query search with RRF (Reciprocal Rank Fusion)
         Default: searches all 3 courts
+        
+        Optimized: Pre-compute all embeddings, then search in parallel
         """
         print(f"\n🔍 Multi-query search: {len(queries)} queries → {source.value}")
         
-        # Execute searches in parallel
-        tasks = [
-            self.orchestrated_search(q, source, results_per_query, rerank=False)
+        # Pre-compute all embeddings at once (faster than doing it per-query)
+        config = get_configs()[DataSource.CONSTITUTIONAL_COURT]
+        print(f"🧠 Computing embeddings for {len(queries)} queries...")
+        vectors = [
+            embedding_manager.get_embedding(q, config.embedding_model)
             for q in queries
         ]
-        all_results = await asyncio.gather(*tasks)
+        print(f"✅ Embeddings computed")
+        
+        # Determine which courts to search
+        if source == DataSource.ALL_COURTS:
+            court_sources = [
+                DataSource.CONSTITUTIONAL_COURT,
+                DataSource.SUPREME_COURT,
+                DataSource.SUPREME_ADMIN_COURT,
+            ]
+        else:
+            court_sources = [source]
+        
+        # Execute ALL searches in parallel (queries × courts)
+        # Use semaphore to limit concurrent requests to avoid overwhelming Qdrant
+        total_searches = len(queries) * len(court_sources)
+        print(f"🔍 Searching {len(queries)} queries × {len(court_sources)} courts = {total_searches} searches...")
+        
+        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent searches to reduce load
+        
+        async def limited_search(court: DataSource, vector: List[float]) -> List[CaseResult]:
+            async with semaphore:
+                return await self._execute_search_with_vector(court, vector, results_per_query)
+        
+        tasks = []
+        for vector in vectors:
+            for court in court_sources:
+                tasks.append(limited_search(court, vector))
+        
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Count successes and failures
+        successes = sum(1 for r in all_results if not isinstance(r, Exception) and r)
+        failures = sum(1 for r in all_results if isinstance(r, Exception))
+        empty = sum(1 for r in all_results if not isinstance(r, Exception) and not r)
+        print(f"📊 Search results: {successes} success, {failures} failed, {empty} empty")
+        
+        # Group results by query
+        results_per_query_list = []
+        idx = 0
+        for q_idx, _ in enumerate(queries):
+            query_results = []
+            for court in court_sources:
+                result = all_results[idx]
+                if isinstance(result, Exception):
+                    print(f"   ⚠️ Query {q_idx+1}, {court.value}: {result}")
+                elif result:
+                    # Tag with data source
+                    for r in result:
+                        r.data_source = court.value
+                    query_results.extend(result)
+                idx += 1
+            # Sort by score and deduplicate
+            query_results.sort(key=lambda x: x.relevance_score, reverse=True)
+            query_results = self._deduplicate_results(query_results)
+            results_per_query_list.append(query_results)
+        
+        all_results = results_per_query_list
         
         # RRF fusion (k=60 is standard)
         case_scores: Dict[str, Dict[str, Any]] = {}
