@@ -2,6 +2,7 @@
 Multi-Source Search Router - V2 API with orchestrated search
 """
 import json
+import re
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -63,11 +64,22 @@ async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verif
 
         # Generate answer
         answer = ""
-        filtered_cases = cases
+        filtered_cases = []
         if cases:
             answer = await llm_service.answer_based_on_cases(request.question, cases)
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in answer:
-                filtered_cases = []
+            
+            # Only return cited cases
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in answer:
+                # Extract citation numbers from the answer
+                citation_pattern = r'\[\^(\d+)\]'
+                cited_indices = set()
+                for match in re.finditer(citation_pattern, answer):
+                    index = int(match.group(1)) - 1
+                    if 0 <= index < len(cases):
+                        cited_indices.add(index)
+                
+                filtered_cases = [cases[i] for i in sorted(cited_indices)]
+                print(f"📋 Non-streaming: Returning {len(filtered_cases)} cited cases out of {len(cases)} total")
 
         return CaseSearchResponse(answer=answer, supporting_cases=filtered_cases)
     except Exception as e:
@@ -129,15 +141,29 @@ async def case_search_stream(
             print(f"   Answer preview: {full_answer[:300]}...")
             yield 'data: {"type": "answer_complete"}\n\n'
 
-            # Send cases
+            # Send only cited cases
             relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in full_answer
             print(f"📋 Cases relevant check: {relevant}")
             print(f"   Contains 'ŽÁDNÉ RELEVANTNÍ': {'⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY' in full_answer}")
             yield 'data: {"type": "cases_start"}\n\n'
             
-            if relevant:
-                for case in cases:
-                    yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'subject': (case.subject or '')[:300], 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'data_source': case.data_source})}\n\n"
+            if relevant and cases:
+                # Extract citation numbers from the answer (e.g., [^1], [^2], [^3])
+                citation_pattern = r'\[\^(\d+)\]'
+                cited_indices = set()
+                for match in re.finditer(citation_pattern, full_answer):
+                    index = int(match.group(1)) - 1  # Convert to 0-based index
+                    if 0 <= index < len(cases):
+                        cited_indices.add(index)
+                
+                # Send only cases that were actually cited
+                cited_cases = [cases[i] for i in sorted(cited_indices)]
+                print(f"📋 Sending {len(cited_cases)} cited cases out of {len(cases)} total")
+                
+                for idx, case in enumerate(cited_cases):
+                    # Find original index for citation reference
+                    original_idx = cases.index(case) + 1  # 1-based for [^1], [^2], etc.
+                    yield f"data: {json.dumps({'type': 'case', 'citation_index': original_idx, 'case_number': case.case_number, 'court': case.court, 'subject': (case.subject or '')[:500], 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'data_source': case.data_source, 'full_text': case.subject or ''})}\n\n"
 
             yield 'data: {"type": "search_complete"}\n\n'
         except Exception as e:
@@ -165,11 +191,22 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
 
         # Generate case answer
         case_answer = ""
-        filtered_cases = cases
+        filtered_cases = []
         if cases:
             case_answer = await llm_service.answer_based_on_cases(request.question, cases)
-            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" in case_answer:
-                filtered_cases = []
+            
+            # Only return cited cases
+            if "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_answer:
+                # Extract citation numbers from the answer
+                citation_pattern = r'\[\^(\d+)\]'
+                cited_indices = set()
+                for match in re.finditer(citation_pattern, case_answer):
+                    index = int(match.group(1)) - 1
+                    if 0 <= index < len(cases):
+                        cited_indices.add(index)
+                
+                filtered_cases = [cases[i] for i in sorted(cited_indices)]
+                print(f"📋 Combined non-streaming: Returning {len(filtered_cases)} cited cases out of {len(cases)} total")
 
         return CombinedSearchResponse(
             web_answer=web_answer,
@@ -224,10 +261,22 @@ async def combined_search_stream(
 
             yield 'data: {"type": "case_search_complete"}\n\n'
 
-            # Cases
+            # Send only cited cases
             relevant = "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY" not in case_full
-            if relevant:
-                for case in cases:
+            if relevant and cases:
+                # Extract citation numbers from the answer
+                citation_pattern = r'\[\^(\d+)\]'
+                cited_indices = set()
+                for match in re.finditer(citation_pattern, case_full):
+                    index = int(match.group(1)) - 1  # Convert to 0-based index
+                    if 0 <= index < len(cases):
+                        cited_indices.add(index)
+                
+                # Send only cases that were actually cited
+                cited_cases = [cases[i] for i in sorted(cited_indices)]
+                print(f"📋 Combined search: Sending {len(cited_cases)} cited cases out of {len(cases)} total")
+                
+                for case in cited_cases:
                     yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'relevance_score': round(case.relevance_score, 3)})}\n\n"
 
             # Summary

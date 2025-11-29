@@ -44,7 +44,7 @@ class Settings:
 
     # GPT-5-mini configuration (400K context, optimized for reasoning)
     LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-5-mini")
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.15"))  # Lower for max accuracy
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.15"))  # Balanced for understanding and precision
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "32000"))  # GPT-5-mini supports 400K context
     LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "600.0"))  # 10 min for reasoning/thinking
     LLM_THINKING_BUDGET: int = int(os.getenv("LLM_THINKING_BUDGET", "10000"))  # Thinking tokens budget
@@ -67,7 +67,7 @@ class Settings:
     RERANK_TOP_K: int = 25  # Rerank top 25 candidates
     
     # Quality thresholds
-    MIN_RELEVANCE_SCORE: float = 0.5  # Minimum score to include (higher quality)
+    MIN_RELEVANCE_SCORE: float = 0.3  # Minimum score to include (cast wider net)
     HIGH_RELEVANCE_THRESHOLD: float = 0.7  # High confidence threshold
 
     @property

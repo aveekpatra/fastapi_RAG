@@ -19,23 +19,32 @@ from app.models import CaseResult
 from app.utils.formatters import format_cases_for_context
 
 # Optimized prompts for GPT-5-mini (clearer, more structured)
-SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Analyzujte soudní rozhodnutí a odpovězte přirozeně s citacemi.
+SYSTEM_PROMPT = """Jste právní analytik specializující se na české právo. Vaším úkolem je poskytnout PŘÍMOU a RELEVANTNÍ odpověď na dotaz klienta.
 
-PRAVIDLA:
-1. Používejte informace z poskytnutých rozhodnutí
-2. Citujte klíčové pasáže pomocí [^1], [^2] atd.
-3. VŽDY se pokuste najít relevantní informace v rozhodnutích
-4. Pouze pokud rozhodnutí VŮBEC nesouvisí s tématem: "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY"
-5. NIKDY nevymýšlejte informace
+KRITICKÁ PRAVIDLA:
+1. Odpovězte POUZE na položenou otázku
+2. Používejte POUZE relevantní informace z rozhodnutí
+3. IGNORUJTE rozhodnutí, která nejsou relevantní - NEZMIŇUJTE je
+4. Pokud ŽÁDNÉ rozhodnutí neodpovídá: "⚠️ ŽÁDNÉ RELEVANTNÍ PŘÍPADY"
 
-FORMÁT:
-- Přímá odpověď s inline citacemi [^1], [^2]
-- Konkrétní závěry z odůvodnění
-- Na konci: **Citované případy:** s odkazy
+FORMÁT CITACÍ - VELMI DŮLEŽITÉ:
+Když citujete z rozhodnutí, použijte tento PŘESNÝ formát:
+> „přesná citace z rozhodnutí" [^číslo]
 
-Pište jako právník vysvětlující klientovi - konkrétně, s citacemi.
+Příklad:
+> „Právnická osoba má právo na náhradu nemajetkové újmy při zásahu do její dobré pověsti." [^1]
 
-DŮLEŽITÉ: Pokud máte k dispozici rozhodnutí, VŽDY se pokuste z nich extrahovat užitečné informace. Odpovězte "žádné relevantní případy" POUZE pokud rozhodnutí absolutně nesouvisí s dotazem."""
+STRUKTURA ODPOVĚDI:
+1. Přímá odpověď na otázku
+2. Právní analýza s DOSLOVNÝMI citacemi ve formátu > „citace" [^číslo]
+3. Na konci: **Podobné případy:** se seznamem citovaných rozhodnutí
+
+CO NEDĚLAT:
+❌ Nezmiňujte nerelevantní rozhodnutí
+❌ Nepoužívejte citace bez uvozovek
+❌ Neparafrázujte - citujte DOSLOVNĚ
+
+Pište stručně, jasně, s přesnými citacemi."""
 
 SONAR_PROMPT = """Jste právní expert na české právo a LEGISLATIVU. Odpovídejte na základě AKTUÁLNÍCH ZÁKONŮ.
 
@@ -137,7 +146,19 @@ class LLMService:
             prompt = ChatPromptTemplate.from_messages([
                 SystemMessagePromptTemplate.from_template(SYSTEM_PROMPT),
                 HumanMessagePromptTemplate.from_template(
-                    "OTÁZKA: {question}\n\nROZHODNUTÍ:\n{context}\n\nOdpovězte s citacemi:"
+                    """OTÁZKA KLIENTA: {question}
+
+DOSTUPNÁ ROZHODNUTÍ:
+{context}
+
+INSTRUKCE:
+1. Přečtěte si otázku
+2. Najděte POUZE rozhodnutí, která přímo odpovídají na otázku
+3. Ignorujte všechna ostatní rozhodnutí
+4. Odpovězte stručně s citacemi [^1], [^2] pouze z relevantních rozhodnutí
+5. NEZMIŇUJTE rozhodnutí, která nejsou relevantní
+
+ODPOVĚĎ:"""
                 ),
             ])
             self._chains["case_answer"] = prompt | self.gpt_model | StrOutputParser()
