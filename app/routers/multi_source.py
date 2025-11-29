@@ -1,9 +1,6 @@
 """
-Multi-Source Search Router - Simplified Pipeline
-1. Generate search queries
-2. Vector search
-3. Filter relevant cases
-4. Generate answer with full text
+Multi-Source Search Router - Quality Focused
+Pipeline: Generate queries → Vector search → Cross-encoder rerank → Answer
 """
 import json
 import re
@@ -46,30 +43,25 @@ async def get_available_sources(api_key_valid: bool = Depends(verify_api_key)):
 @router.post("/case-search", response_model=CaseSearchResponse)
 async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verify_api_key)):
     """
-    Simplified pipeline:
-    1. Generate search queries
-    2. Vector search
-    3. Filter relevant cases
+    Quality-focused search:
+    1. Generate 5-7 search queries
+    2. Vector search (get lots of candidates)
+    3. Cross-encoder rerank (precision)
     4. Generate answer
     """
     try:
         source = _convert_source(request.source)
         
-        # Step 1: Generate search queries
-        queries = await llm_service.generate_search_queries(request.question, num_queries=3)
+        # Generate multiple queries for better recall
+        queries = await llm_service.generate_search_queries(request.question, num_queries=7)
         
-        # Step 2: Vector search (returns cases with full text)
-        cases = await multi_source_engine.search(queries, source, limit=10)
+        # Search with cross-encoder reranking
+        cases = await multi_source_engine.search(queries, source, limit=request.top_k)
         
-        # Step 3: Filter relevant cases
-        relevant_cases = await llm_service.filter_relevant_cases(
-            request.question, cases, max_cases=request.top_k
-        )
+        # Generate answer
+        answer = await llm_service.answer_based_on_cases(request.question, cases)
         
-        # Step 4: Generate answer
-        answer = await llm_service.answer_based_on_cases(request.question, relevant_cases)
-        
-        return CaseSearchResponse(answer=answer, supporting_cases=relevant_cases)
+        return CaseSearchResponse(answer=answer, supporting_cases=cases)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -82,55 +74,61 @@ async def case_search_stream(
     source: DataSourceEnum = Query(DataSourceEnum.ALL_COURTS),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):
-    """Streaming case search"""
+    """Streaming case search with quality focus"""
 
     async def generate():
         try:
             internal_source = _convert_source(source)
             
-            print(f"\n🎯 Search: {question[:100]}...")
+            print(f"\n{'='*60}")
+            print(f"🎯 QUALITY SEARCH")
+            print(f"   Question: {question[:80]}...")
+            print(f"{'='*60}")
             
             yield f'data: {json.dumps({"type": "search_start", "source": source.value})}\n\n'
             
             # Step 1: Generate queries
             yield 'data: {"type": "generating_queries"}\n\n'
-            queries = await llm_service.generate_search_queries(question, num_queries=3)
+            queries = await llm_service.generate_search_queries(question, num_queries=7)
             yield f'data: {json.dumps({"type": "queries_generated", "count": len(queries)})}\n\n'
             
-            # Step 2: Vector search
+            # Step 2: Search with cross-encoder reranking
             yield 'data: {"type": "searching"}\n\n'
-            cases = await multi_source_engine.search(queries, internal_source, limit=10)
+            cases = await multi_source_engine.search(queries, internal_source, limit=top_k)
             yield f'data: {json.dumps({"type": "cases_found", "count": len(cases)})}\n\n'
             
-            # Step 3: Filter relevant
-            yield 'data: {"type": "filtering"}\n\n'
-            relevant_cases = await llm_service.filter_relevant_cases(question, cases, max_cases=top_k)
-            yield f'data: {json.dumps({"type": "relevant_cases", "count": len(relevant_cases)})}\n\n'
-            
-            # Step 4: Stream answer
+            # Step 3: Stream answer
             yield 'data: {"type": "generating_answer"}\n\n'
             
             full_answer = ""
-            if relevant_cases:
-                async for chunk in llm_service.answer_based_on_cases_stream(question, relevant_cases):
-                    full_answer += chunk
-                    yield f"data: {json.dumps({'type': 'answer_chunk', 'content': chunk})}\n\n"
-            else:
-                no_answer = "Nemám odpověď na tuto otázku. V databázi jsem nenašel relevantní soudní rozhodnutí."
-                full_answer = no_answer
-                yield f"data: {json.dumps({'type': 'answer_chunk', 'content': no_answer})}\n\n"
+            async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
+                full_answer += chunk
+                yield f"data: {json.dumps({'type': 'answer_chunk', 'content': chunk})}\n\n"
             
             yield 'data: {"type": "answer_complete"}\n\n'
             
-            # Send cases
+            # Send cases with full text
             yield 'data: {"type": "cases_start"}\n\n'
-            for idx, case in enumerate(relevant_cases):
-                yield f"data: {json.dumps({'type': 'case', 'citation_index': idx + 1, 'case_number': case.case_number, 'court': case.court, 'subject': (case.subject or '')[:500], 'date_issued': case.date_issued, 'relevance_score': round(case.relevance_score, 3), 'data_source': case.data_source, 'full_text': case.subject or ''})}\n\n"
+            for idx, case in enumerate(cases):
+                case_data = {
+                    'type': 'case',
+                    'citation_index': idx + 1,
+                    'case_number': case.case_number,
+                    'court': case.court,
+                    'date_issued': case.date_issued,
+                    'relevance_score': round(case.relevance_score, 3),
+                    'data_source': case.data_source,
+                    'subject': (case.subject or '')[:500],
+                    'full_text': case.subject or '',
+                }
+                yield f"data: {json.dumps(case_data)}\n\n"
             
             yield 'data: {"type": "search_complete"}\n\n'
             
         except Exception as e:
             print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -142,15 +140,13 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
     try:
         source = _convert_source(request.source)
         
-        # Parallel: web + case search
         import asyncio
         
         async def do_case_search():
-            queries = await llm_service.generate_search_queries(request.question, num_queries=3)
-            cases = await multi_source_engine.search(queries, source, limit=10)
-            relevant = await llm_service.filter_relevant_cases(request.question, cases, max_cases=request.top_k)
-            answer = await llm_service.answer_based_on_cases(request.question, relevant)
-            return answer, relevant
+            queries = await llm_service.generate_search_queries(request.question, num_queries=7)
+            cases = await multi_source_engine.search(queries, source, limit=request.top_k)
+            answer = await llm_service.answer_based_on_cases(request.question, cases)
+            return answer, cases
         
         web_task = llm_service.get_sonar_answer(request.question)
         case_task = do_case_search()
@@ -198,20 +194,18 @@ async def combined_search_stream(
             
             # Case search
             yield 'data: {"type": "case_search_start"}\n\n'
-            queries = await llm_service.generate_search_queries(question, num_queries=3)
-            cases = await multi_source_engine.search(queries, internal_source, limit=10)
-            relevant = await llm_service.filter_relevant_cases(question, cases, max_cases=top_k)
+            queries = await llm_service.generate_search_queries(question, num_queries=7)
+            cases = await multi_source_engine.search(queries, internal_source, limit=top_k)
             
             case_full = ""
-            if relevant:
-                async for chunk in llm_service.answer_based_on_cases_stream(question, relevant):
-                    case_full += chunk
-                    yield f"data: {json.dumps({'type': 'case_chunk', 'content': chunk})}\n\n"
+            async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
+                case_full += chunk
+                yield f"data: {json.dumps({'type': 'case_chunk', 'content': chunk})}\n\n"
             
             yield 'data: {"type": "case_search_complete"}\n\n'
             
             # Send cases
-            for case in relevant:
+            for case in cases:
                 yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'relevance_score': round(case.relevance_score, 3)})}\n\n"
             
             # Summary

@@ -1,8 +1,6 @@
 """
-LLM Service - Simplified
-1. Generate search queries (fast model)
-2. Check relevance (fast model)
-3. Generate answer (main model)
+LLM Service - Optimized for Quality
+Focus: Better queries, better answers
 """
 import asyncio
 from typing import AsyncIterator, Optional, List
@@ -17,45 +15,57 @@ from app.models import CaseResult
 
 
 # =============================================================================
-# PROMPTS - All in Czech, simple and direct
+# PROMPTS - Optimized for Czech legal search
 # =============================================================================
 
-QUERY_PROMPT = """Vygeneruj 3 vyhledávací dotazy pro právní databázi českých soudních rozhodnutí.
+QUERY_PROMPT = """Jsi expert na české právo. Vygeneruj 5-7 různých vyhledávacích dotazů pro právní databázi.
+
+STRATEGIE:
+1. Přímý dotaz - přesná formulace otázky
+2. Právní terminologie - použij odborné termíny
+3. Synonyma - různé způsoby vyjádření
+4. Specifické aspekty - rozděl na dílčí otázky
+5. Obecnější dotaz - širší kontext
+6. Konkrétnější dotaz - specifické detaily
 
 PRAVIDLA:
-- Použij českou právní terminologii
 - Každý dotaz na nový řádek
-- Bez číslování, bez vysvětlení
-- Max 10 slov na dotaz
+- Bez číslování
+- Max 15 slov na dotaz
+- Použij českou právní terminologii
+- Různé úhly pohledu
+
+PŘÍKLAD pro "náhrada škody při dopravní nehodě":
+náhrada škody dopravní nehoda
+odškodnění újma na zdraví autonehoda
+bolestné ztížení společenského uplatnění
+odpovědnost za škodu provoz vozidla
+pojistné plnění povinné ručení
+regres pojišťovny viník nehody
 
 OTÁZKA: {question}
 
 DOTAZY:"""
 
 
-RELEVANCE_PROMPT = """Jsi právní asistent. Rozhodni, zda je rozhodnutí relevantní pro otázku.
+ANSWER_PROMPT = """Jsi zkušený český právní analytik. Odpověz na otázku na základě soudních rozhodnutí.
 
-OTÁZKA: {question}
-
-ROZHODNUTÍ ({case_number}):
-{text}
-
-Odpověz POUZE "ANO" nebo "NE"."""
-
-
-ANSWER_PROMPT = """Jsi český právní analytik. Odpověz na otázku na základě poskytnutých soudních rozhodnutí.
-
-PRAVIDLA:
-1. Odpověz PŘÍMO na otázku
-2. Cituj DOSLOVNĚ z rozhodnutí ve formátu: > „citace" [číslo]
-3. Vysvětli, co citace znamená
-4. Pokud rozhodnutí neodpovídají na otázku, řekni: "Nemám odpověď na tuto otázku."
-5. Piš česky, stručně, jasně
+KRITICKÁ PRAVIDLA:
+1. Odpověz PŘÍMO na otázku - první věta musí být jasná odpověď
+2. Cituj DOSLOVNĚ z rozhodnutí: > „přesná citace" [číslo]
+3. Vysvětli, co citace znamená a proč je důležitá
+4. Pokud rozhodnutí NEODPOVÍDAJÍ na otázku, řekni: "Nemám odpověď na tuto otázku."
+5. NECITUJ rozhodnutí, která nejsou relevantní!
 
 STRUKTURA:
-1. Přímá odpověď (1-2 věty)
-2. Právní analýza s citacemi
-3. Závěr
+1. **Odpověď:** (1-2 věty, jasně)
+2. **Analýza:** (citace s vysvětlením)
+3. **Závěr:** (praktické shrnutí)
+
+FORMÁT CITACE:
+> „přesná citace z textu rozhodnutí" [1]
+
+To znamená, že... (vysvětlení)
 
 OTÁZKA: {question}
 
@@ -76,13 +86,12 @@ class LLMService:
     
     @property
     def main_model(self) -> ChatOpenAI:
-        """Main model for answers"""
         if self._main_model is None:
             self._main_model = ChatOpenAI(
                 model=settings.LLM_MODEL,
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url=settings.OPENROUTER_BASE_URL,
-                temperature=0.2,
+                temperature=0.1,  # Lower for more focused answers
                 max_tokens=settings.LLM_MAX_TOKENS,
                 timeout=settings.LLM_TIMEOUT,
             )
@@ -90,20 +99,19 @@ class LLMService:
     
     @property
     def fast_model(self) -> ChatOpenAI:
-        """Fast model for queries and relevance"""
         if self._fast_model is None:
             self._fast_model = ChatOpenAI(
                 model=settings.FAST_MODEL,
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url=settings.OPENROUTER_BASE_URL,
-                temperature=0.3,
-                max_tokens=1000,
+                temperature=0.5,  # More creative for query generation
+                max_tokens=2000,
                 timeout=60.0,
             )
         return self._fast_model
     
-    async def generate_search_queries(self, question: str, num_queries: int = 3) -> List[str]:
-        """Generate search queries from user question"""
+    async def generate_search_queries(self, question: str, num_queries: int = 7) -> List[str]:
+        """Generate multiple search queries for better recall"""
         try:
             prompt = ChatPromptTemplate.from_messages([
                 HumanMessagePromptTemplate.from_template(QUERY_PROMPT)
@@ -112,85 +120,66 @@ class LLMService:
             
             result = await chain.ainvoke({"question": question})
             
-            # Parse queries
-            queries = [q.strip() for q in result.split("\n") if q.strip() and len(q.strip()) > 5]
+            # Parse queries - be more lenient
+            queries = []
+            for line in result.split("\n"):
+                line = line.strip()
+                # Skip empty lines and lines that look like instructions
+                if not line or len(line) < 5:
+                    continue
+                if line.startswith(("-", "*", "•", "1.", "2.", "3.")):
+                    line = line.lstrip("-*•0123456789. ")
+                if len(line) >= 5:
+                    queries.append(line)
             
-            # Always include original question
-            final = [question] + [q for q in queries if q.lower() != question.lower()]
+            # Always include original question first
+            final = [question]
+            for q in queries:
+                if q.lower() != question.lower() and q not in final:
+                    final.append(q)
             
-            print(f"✅ Generated {len(final)} queries")
-            return final[:num_queries + 1]
+            print(f"✅ Generated {len(final)} queries:")
+            for q in final[:5]:
+                print(f"   • {q[:60]}...")
+            
+            return final[:num_queries]
             
         except Exception as e:
             print(f"⚠️ Query generation failed: {e}")
             return [question]
     
-    async def check_relevance(self, question: str, case: CaseResult) -> bool:
-        """Quick relevance check with fast model"""
-        try:
-            # Use first 2000 chars of text
-            text = (case.subject or "")[:2000]
-            if not text:
-                return False
-            
-            prompt = RELEVANCE_PROMPT.format(
-                question=question,
-                case_number=case.case_number,
-                text=text
-            )
-            
-            response = await self.fast_model.ainvoke(prompt)
-            answer = response.content.strip().upper()
-            
-            return "ANO" in answer
-            
-        except Exception as e:
-            print(f"⚠️ Relevance check failed: {e}")
-            return True  # Include on error
-    
-    async def filter_relevant_cases(
-        self, question: str, cases: List[CaseResult], max_cases: int = 5
-    ) -> List[CaseResult]:
-        """Filter cases by relevance using fast model"""
-        if not cases:
-            return []
-        
-        print(f"🔍 Checking relevance of {len(cases)} cases...")
-        
-        # Check relevance in parallel
-        tasks = [self.check_relevance(question, case) for case in cases[:10]]
-        results = await asyncio.gather(*tasks)
-        
-        relevant = [case for case, is_relevant in zip(cases[:10], results) if is_relevant]
-        
-        print(f"✅ Found {len(relevant)} relevant cases")
-        return relevant[:max_cases]
-    
     def _format_cases_for_context(self, cases: List[CaseResult]) -> str:
-        """Format cases for LLM context"""
+        """Format cases for LLM - include ALL available text"""
         parts = []
         for i, case in enumerate(cases, 1):
             text = case.subject or "Text není k dispozici."
-            # Limit text length
-            if len(text) > 8000:
-                text = text[:8000] + "..."
+            
+            # Include more text - up to 10k chars per case
+            if len(text) > 10000:
+                text = text[:10000] + "...[zkráceno]"
             
             parts.append(f"""
+═══════════════════════════════════════════════════════════════════════════════
 [{i}] {case.case_number}
 Soud: {case.court}
 Datum: {case.date_issued or "N/A"}
+Relevance: {case.relevance_score:.3f}
+═══════════════════════════════════════════════════════════════════════════════
 
 {text}
 """)
-        return "\n---\n".join(parts)
+        return "\n".join(parts)
     
     async def answer_based_on_cases(self, question: str, cases: List[CaseResult]) -> str:
-        """Generate answer based on cases"""
+        """Generate answer - let LLM decide what's relevant"""
         if not cases:
-            return "Nemám odpověď na tuto otázku. V databázi jsem nenašel relevantní soudní rozhodnutí."
+            return "Nemám odpověď na tuto otázku. V databázi jsem nenašel žádná soudní rozhodnutí."
         
         try:
             context = self._format_cases_for_context(cases)
+            
+            print(f"📤 Sending {len(cases)} cases to LLM")
+            print(f"   Context: {len(context):,} chars")
             
             prompt = ChatPromptTemplate.from_messages([
                 HumanMessagePromptTemplate.from_template(ANSWER_PROMPT)
@@ -206,18 +195,21 @@ Datum: {case.date_issued or "N/A"}
             
         except Exception as e:
             print(f"⚠️ Answer generation failed: {e}")
-            return "Došlo k chybě při generování odpovědi. Zkuste to prosím znovu."
+            return "Došlo k chybě při generování odpovědi."
     
     async def answer_based_on_cases_stream(
         self, question: str, cases: List[CaseResult]
     ) -> AsyncIterator[str]:
-        """Stream answer based on cases"""
+        """Stream answer"""
         if not cases:
-            yield "Nemám odpověď na tuto otázku. V databázi jsem nenašel relevantní soudní rozhodnutí."
+            yield "Nemám odpověď na tuto otázku. V databázi jsem nenašel žádná soudní rozhodnutí."
             return
         
         try:
             context = self._format_cases_for_context(cases)
+            
+            print(f"📤 Streaming {len(cases)} cases")
+            print(f"   Context: {len(context):,} chars")
             
             prompt = ChatPromptTemplate.from_messages([
                 HumanMessagePromptTemplate.from_template(ANSWER_PROMPT)
@@ -235,13 +227,19 @@ Datum: {case.date_issued or "N/A"}
             print(f"⚠️ Streaming failed: {e}")
             yield "Došlo k chybě při generování odpovědi."
     
+    # Skip relevance filtering - cross-encoder handles this now
+    async def filter_relevant_cases(
+        self, question: str, cases: List[CaseResult], max_cases: int = 10
+    ) -> List[CaseResult]:
+        """Just return cases - cross-encoder already filtered"""
+        return cases[:max_cases]
+    
     async def rerank_cases(self, query: str, cases: List[CaseResult]) -> List[CaseResult]:
-        """Simple reranking - just return as-is for now"""
+        """Reranking is now done by cross-encoder in search"""
         return cases
     
-    # Sonar for web search (keep for compatibility)
+    # Sonar for web search
     async def get_sonar_answer(self, question: str) -> tuple[str, list[str]]:
-        """Web search with Sonar"""
         try:
             sonar = ChatOpenAI(
                 model="perplexity/sonar",
@@ -267,7 +265,6 @@ Datum: {case.date_issued or "N/A"}
             return "", []
     
     async def get_sonar_answer_stream(self, question: str):
-        """Stream Sonar answer"""
         try:
             sonar = ChatOpenAI(
                 model="perplexity/sonar",
@@ -296,7 +293,6 @@ Datum: {case.date_issued or "N/A"}
     async def generate_summary_stream(
         self, question: str, web_answer: str, case_answer: str
     ) -> AsyncIterator[str]:
-        """Generate summary"""
         try:
             prompt = f"""Shrň hlavní závěry v 2-3 větách česky:
 
