@@ -39,12 +39,13 @@ SONAR_PROMPT = """Jste právní expert na české právo a LEGISLATIVU. Odpovíd
 Citujte konkrétní paragrafy (např. § 123 zákona č. 89/2012 Sb.) s odkazy na zakonyprolidi.cz.
 VYHÝBEJTE SE citacím soudních rozhodnutí."""
 
-QUERY_GENERATION_PROMPT = """Vygenerujte 2-3 optimalizované vyhledávací dotazy pro právní databázi.
+QUERY_GENERATION_PROMPT = """Vygenerujte 3-5 optimalizovaných vyhledávacích dotazů pro právní databázi.
 
 PRAVIDLA:
 - Zachovejte původní význam
-- Max 8 slov na dotaz
-- Právní terminologie
+- Max 10 slov na dotaz
+- Používejte právní terminologii
+- Různé formulace stejného problému
 - Jeden dotaz na řádek, bez číslování
 
 OTÁZKA: {question}
@@ -145,8 +146,12 @@ class LLMService:
             self._chains["query"] = prompt | self.fast_model | StrOutputParser()
         return self._chains["query"]
 
-    async def generate_search_queries(self, question: str, num_queries: int = 3) -> list[str]:
-        """Generate optimized search queries using GPT-5-nano (ultra-fast)"""
+    async def generate_search_queries(self, question: str, num_queries: int = 5) -> list[str]:
+        """Generate optimized search queries using GPT-5-nano (ultra-fast)
+        
+        Dynamically generates 3-5 queries based on question complexity.
+        Always includes the original question.
+        """
         try:
             chain = self._get_query_chain()
             result = await chain.ainvoke({"question": question})
@@ -154,19 +159,21 @@ class LLMService:
             queries = [
                 q.strip()
                 for q in result.split("\n")
-                if q.strip() and not q.strip().startswith(("1.", "2.", "3.", "-", "*"))
+                if q.strip() and not q.strip().startswith(("1.", "2.", "3.", "4.", "5.", "-", "*", "•"))
             ]
             
-            # Validate
-            validated = [q for q in queries if 2 <= len(q.split()) <= 12][:num_queries]
+            # Validate - allow longer queries for complex legal terms
+            validated = [q for q in queries if 2 <= len(q.split()) <= 15]
             
-            # Always include original
+            # Always include original question first
             final = [question]
             for q in validated:
-                if q != question and len(final) < num_queries:
+                if q.lower() != question.lower() and len(final) < num_queries:
                     final.append(q)
 
             print(f"✅ Generated {len(final)} queries (GPT-5-nano)")
+            for i, q in enumerate(final):
+                print(f"   [{i+1}] {q[:60]}{'...' if len(q) > 60 else ''}")
             return final
         except Exception as e:
             print(f"❌ Query generation error: {e}")

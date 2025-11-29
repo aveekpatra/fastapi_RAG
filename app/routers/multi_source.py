@@ -77,7 +77,7 @@ async def case_search(request: QueryRequest, api_key_valid: bool = Depends(verif
 @router.get("/case-search-stream")
 async def case_search_stream(
     question: str = Query(..., min_length=3, max_length=5000),
-    top_k: int = Query(7, ge=1, le=20),
+    top_k: int = Query(10, ge=1, le=25),
     source: DataSourceEnum = Query(DataSourceEnum.ALL_COURTS),
     api_key_valid: bool = Depends(verify_api_key_query),
 ):

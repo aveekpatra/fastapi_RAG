@@ -61,13 +61,13 @@ class Settings:
     SEZNAM_VECTOR_SIZE: int = 256
 
     # RAG Pipeline configuration
-    NUM_GENERATED_QUERIES: int = 3  # Generate 3 query variants
+    NUM_GENERATED_QUERIES: int = 5  # Generate up to 5 query variants (dynamic based on complexity)
     RESULTS_PER_QUERY: int = 15  # Get more results for better reranking
-    FINAL_TOP_K: int = 7  # Return top 7 after reranking
-    RERANK_TOP_K: int = 20  # Rerank top 20 candidates
+    FINAL_TOP_K: int = 10  # Return top 10 after reranking
+    RERANK_TOP_K: int = 25  # Rerank top 25 candidates
     
     # Quality thresholds
-    MIN_RELEVANCE_SCORE: float = 0.3  # Minimum score to include
+    MIN_RELEVANCE_SCORE: float = 0.5  # Minimum score to include (higher quality)
     HIGH_RELEVANCE_THRESHOLD: float = 0.7  # High confidence threshold
 
     @property
