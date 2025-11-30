@@ -149,26 +149,56 @@ class LLMService:
             return [question]
     
     def _format_cases_for_context(self, cases: List[CaseResult]) -> str:
-        """Format cases for LLM - include ALL available text"""
+        """Format cases for LLM - include ALL available text with clear truncation"""
         parts = []
+        total_chars = 0
+        max_total_chars = 100000  # ~25k tokens, safe for most models
+        max_per_case = 15000  # ~3.7k tokens per case
+        
         for i, case in enumerate(cases, 1):
-            text = case.subject or "Text není k dispozici."
+            text = case.subject or ""
+            original_length = len(text)
             
-            # Include more text - up to 10k chars per case
-            if len(text) > 10000:
-                text = text[:10000] + "...[zkráceno]"
+            if not text:
+                text = "[Text rozhodnutí není k dispozici]"
+            
+            # Truncate if needed with clear marker
+            truncated = False
+            if len(text) > max_per_case:
+                text = text[:max_per_case]
+                truncated = True
+            
+            # Check total context size
+            if total_chars + len(text) > max_total_chars:
+                remaining = max_total_chars - total_chars
+                if remaining > 1000:
+                    text = text[:remaining]
+                    truncated = True
+                else:
+                    # Add note that more cases were skipped
+                    parts.append(f"\n[Dalších {len(cases) - i + 1} rozhodnutí vynecháno kvůli limitu kontextu]")
+                    break
+            
+            truncation_note = ""
+            if truncated:
+                truncation_note = f"\n[⚠️ Text zkrácen z {original_length:,} na {len(text):,} znaků]"
             
             parts.append(f"""
-═══════════════════════════════════════════════════════════════════════════════
+{'═'*80}
 [{i}] {case.case_number}
 Soud: {case.court}
 Datum: {case.date_issued or "N/A"}
-Relevance: {case.relevance_score:.3f}
-═══════════════════════════════════════════════════════════════════════════════
+Relevance skóre: {case.relevance_score:.3f}
+Délka textu: {len(text):,} znaků{truncation_note}
+{'═'*80}
 
 {text}
 """)
-        return "\n".join(parts)
+            total_chars += len(text)
+        
+        result = "\n".join(parts)
+        print(f"   📄 Context: {len(result):,} chars, {len(cases)} cases")
+        return result
     
     async def answer_based_on_cases(self, question: str, cases: List[CaseResult]) -> str:
         """Generate answer - let LLM decide what's relevant"""

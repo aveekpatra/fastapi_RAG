@@ -107,9 +107,13 @@ async def case_search_stream(
             
             yield 'data: {"type": "answer_complete"}\n\n'
             
-            # Send cases with full text
+            # Send cases with full text (no silent truncation)
             yield 'data: {"type": "cases_start"}\n\n'
             for idx, case in enumerate(cases):
+                full_text = case.subject or ''
+                # Preview is truncated but marked
+                preview = full_text[:500] + '...' if len(full_text) > 500 else full_text
+                
                 case_data = {
                     'type': 'case',
                     'citation_index': idx + 1,
@@ -118,8 +122,9 @@ async def case_search_stream(
                     'date_issued': case.date_issued,
                     'relevance_score': round(case.relevance_score, 3),
                     'data_source': case.data_source,
-                    'subject': (case.subject or '')[:500],
-                    'full_text': case.subject or '',
+                    'subject': preview,  # Preview with truncation marker
+                    'full_text': full_text,  # Full text, no truncation
+                    'text_length': len(full_text),  # So frontend knows if truncated
                 }
                 yield f"data: {json.dumps(case_data)}\n\n"
             

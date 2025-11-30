@@ -111,16 +111,20 @@ class EmbeddingManager:
 
 
 class CrossEncoderManager:
-    """Cross-encoder for reranking"""
+    """Cross-encoder for reranking - multilingual model for Czech"""
     
     def __init__(self):
         self._model: Optional[CrossEncoder] = None
-        self._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        # Multilingual cross-encoder - better for Czech
+        self._model_name = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+        # Max tokens for cross-encoder (model limit is 512 tokens)
+        # Czech text is ~4-5 chars per token, so 2000 chars ≈ 400-500 tokens
+        self._max_text_length = 2000
     
     def _get_model(self) -> CrossEncoder:
         if self._model is None:
-            print(f"🎯 Loading cross-encoder: {self._model_name}")
-            self._model = CrossEncoder(self._model_name, device="cpu")
+            print(f"🎯 Loading multilingual cross-encoder: {self._model_name}")
+            self._model = CrossEncoder(self._model_name, device="cpu", max_length=512)
         return self._model
     
     def rerank(self, query: str, cases: List[CaseResult], top_k: int = 10) -> List[CaseResult]:
@@ -130,18 +134,25 @@ class CrossEncoderManager:
         
         model = self._get_model()
         
-        # Create query-document pairs
+        # Create query-document pairs with proper truncation
         pairs = []
         for case in cases:
-            text = (case.subject or "")[:1000]  # Limit text length
+            text = case.subject or ""
+            # Truncate with marker if needed
+            if len(text) > self._max_text_length:
+                text = text[:self._max_text_length] + " [...]"
             pairs.append([query, text])
         
         # Score all pairs
+        print(f"   Scoring {len(pairs)} query-document pairs...")
         scores = model.predict(pairs, show_progress_bar=False)
         
         # Sort by cross-encoder score
         scored_cases = list(zip(cases, scores))
         scored_cases.sort(key=lambda x: x[1], reverse=True)
+        
+        # Log top scores for debugging
+        print(f"   Top 3 scores: {[f'{s:.3f}' for _, s in scored_cases[:3]]}")
         
         # Update relevance scores and return top_k
         result = []
