@@ -316,7 +316,14 @@ class MultiSourceSearchEngine:
         print(f"📄 Fetching full text for {len(reranked)} final cases...")
         enriched = await self._fetch_full_texts(reranked)
         
-        print(f"✅ Returning {len(enriched)} results with full text")
+        # Summary logging
+        print(f"\n{'─'*50}")
+        print(f"✅ SEARCH COMPLETE: {len(enriched)} results")
+        for i, case in enumerate(enriched, 1):
+            text_len = len(case.subject or "")
+            print(f"   [{i}] {case.case_number} ({case.court}) - {text_len:,} chars, score: {case.relevance_score:.3f}")
+        print(f"{'─'*50}\n")
+        
         return enriched
     
     async def _keyword_search_court(
@@ -540,19 +547,21 @@ class MultiSourceSearchEngine:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 # Query for chunk 0 of this case
+                request_body = {
+                    "filter": {
+                        "must": [
+                            {"key": "case_number", "match": {"value": case.case_number}},
+                            {"key": "chunk_index", "match": {"value": 0}},
+                        ]
+                    },
+                    "limit": 1,
+                    "with_payload": True,
+                }
+                
                 response = await client.post(
                     f"{self.qdrant_url}/collections/{config.name}/points/scroll",
                     headers=self.headers,
-                    json={
-                        "filter": {
-                            "must": [
-                                {"key": "case_number", "match": {"value": case.case_number}},
-                                {"key": "chunk_index", "match": {"value": 0}},
-                            ]
-                        },
-                        "limit": 1,
-                        "with_payload": True,
-                    },
+                    json=request_body,
                 )
                 
                 if response.status_code == 200:
@@ -562,17 +571,64 @@ class MultiSourceSearchEngine:
                     if points:
                         payload = points[0].get("payload", {})
                         full_text = payload.get("full_text", "")
+                        chunk_text = payload.get("chunk_text", "")
+                        has_full_text = payload.get("has_full_text", False)
                         
                         if full_text:
                             # Success! Update case.subject with full_text
                             case.subject = full_text
                             print(f"   ✅ {case.case_number}: {len(full_text):,} chars (was {original_text_len:,})")
+                        elif chunk_text and len(chunk_text) > original_text_len:
+                            # Use chunk_text if it's longer than what we have
+                            case.subject = chunk_text
+                            print(f"   📝 {case.case_number}: Using chunk_text {len(chunk_text):,} chars (was {original_text_len:,})")
                         else:
                             # No full_text in chunk 0, keep original
-                            print(f"   ⚠️ {case.case_number}: No full_text in chunk 0, keeping original ({original_text_len:,} chars)")
+                            print(f"   ⚠️ {case.case_number}: No full_text in chunk 0 (has_full_text={has_full_text}), keeping original ({original_text_len:,} chars)")
                     else:
-                        # Chunk 0 not found, keep original
-                        print(f"   ⚠️ {case.case_number}: Chunk 0 not found, keeping original ({original_text_len:,} chars)")
+                        # Chunk 0 not found - try without chunk_index filter
+                        print(f"   🔍 {case.case_number}: Chunk 0 not found, trying without chunk filter...")
+                        
+                        # Try to find any chunk for this case
+                        fallback_response = await client.post(
+                            f"{self.qdrant_url}/collections/{config.name}/points/scroll",
+                            headers=self.headers,
+                            json={
+                                "filter": {
+                                    "must": [
+                                        {"key": "case_number", "match": {"value": case.case_number}},
+                                    ]
+                                },
+                                "limit": 10,
+                                "with_payload": True,
+                            },
+                        )
+                        
+                        if fallback_response.status_code == 200:
+                            fallback_result = fallback_response.json().get('result', {})
+                            fallback_points = fallback_result.get('points', [])
+                            
+                            if fallback_points:
+                                # Find chunk with full_text or longest chunk_text
+                                best_text = ""
+                                for p in fallback_points:
+                                    pl = p.get("payload", {})
+                                    ft = pl.get("full_text", "")
+                                    ct = pl.get("chunk_text", "")
+                                    if ft and len(ft) > len(best_text):
+                                        best_text = ft
+                                    elif ct and len(ct) > len(best_text):
+                                        best_text = ct
+                                
+                                if best_text and len(best_text) > original_text_len:
+                                    case.subject = best_text
+                                    print(f"   📝 {case.case_number}: Found {len(best_text):,} chars from {len(fallback_points)} chunks")
+                                else:
+                                    print(f"   ⚠️ {case.case_number}: {len(fallback_points)} chunks found but no better text")
+                            else:
+                                print(f"   ⚠️ {case.case_number}: No chunks found at all")
+                        else:
+                            print(f"   ⚠️ {case.case_number}: Fallback search failed HTTP {fallback_response.status_code}")
                 else:
                     # HTTP error, keep original
                     print(f"   ⚠️ {case.case_number}: HTTP {response.status_code}, keeping original ({original_text_len:,} chars)")

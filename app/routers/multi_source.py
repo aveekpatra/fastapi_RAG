@@ -109,10 +109,13 @@ async def case_search_stream(
             
             # Send cases with full text (no silent truncation)
             yield 'data: {"type": "cases_start"}\n\n'
+            print(f"\n📤 Sending {len(cases)} cases to frontend:")
             for idx, case in enumerate(cases):
                 full_text = case.subject or ''
                 # Preview is truncated but marked
                 preview = full_text[:500] + '...' if len(full_text) > 500 else full_text
+                
+                print(f"   [{idx+1}] {case.case_number}: {len(full_text):,} chars")
                 
                 case_data = {
                     'type': 'case',
