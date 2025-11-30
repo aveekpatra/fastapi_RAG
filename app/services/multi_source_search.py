@@ -3,10 +3,12 @@ Multi-Source Search Service - Optimized for Quality
 Focus: Get the BEST results, not the fastest
 
 Pipeline:
-1. Generate multiple search queries (5-7 variants)
-2. Vector search across all collections (get MORE results)
-3. Cross-encoder reranking for precision
-4. Return top results with whatever text we have
+1. Extract legal entities (case numbers, statutes, courts)
+2. Generate multiple search queries (5-7 variants)
+3. Vector search across all collections (get MORE results)
+4. Apply entity-based boosting for exact matches
+5. Cross-encoder reranking for precision
+6. Return top results with full text
 """
 import asyncio
 from typing import List, Optional, Dict, Any
@@ -17,6 +19,13 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 
 from app.config import settings
 from app.models import CaseResult
+from app.services.legal_entity_extractor import (
+    extract_entities,
+    calculate_boost,
+    build_keyword_filters,
+    has_searchable_entities,
+    ExtractedEntities,
+)
 
 
 class DataSource(str, Enum):
@@ -195,20 +204,40 @@ class MultiSourceSearchEngine:
     ) -> List[CaseResult]:
         """
         Quality-focused search pipeline:
-        1. Search all courts with all queries (get LOTS of candidates)
-        2. Deduplicate by case number
-        3. Cross-encoder rerank for precision
-        4. Return top results
+        1. Extract legal entities (case numbers, statutes, courts)
+        2. Search all courts with all queries (get LOTS of candidates)
+        3. Apply entity-based boosting for exact matches
+        4. Cross-encoder rerank for precision
+        5. Fetch full_text from chunk 0 for final results
+        6. Return top results with complete text
         """
         print(f"\n🔍 Quality Search: {len(queries)} queries")
         
-        # Determine courts
+        # Step 1: Extract legal entities from original query (fail-safe)
+        original_query = queries[0] if queries else ""
+        entities = extract_entities(original_query)
+        if entities.has_entities():
+            print(f"📋 {entities}")
+        
+        # Determine courts - use entity hint if available and source is ALL_COURTS
         if source == DataSource.ALL_COURTS:
-            courts = [
-                DataSource.CONSTITUTIONAL_COURT,
-                DataSource.SUPREME_COURT,
-                DataSource.SUPREME_ADMIN_COURT,
-            ]
+            if entities.preferred_source and entities.preferred_source != 'general_courts':
+                # User mentioned a specific court, prioritize it but still search others
+                preferred = DataSource(entities.preferred_source)
+                courts = [preferred]  # Search preferred court first
+                other_courts = [
+                    DataSource.CONSTITUTIONAL_COURT,
+                    DataSource.SUPREME_COURT,
+                    DataSource.SUPREME_ADMIN_COURT,
+                ]
+                courts.extend([c for c in other_courts if c != preferred])
+                print(f"   🏛️ Prioritizing {preferred.value} based on query")
+            else:
+                courts = [
+                    DataSource.CONSTITUTIONAL_COURT,
+                    DataSource.SUPREME_COURT,
+                    DataSource.SUPREME_ADMIN_COURT,
+                ]
         else:
             courts = [source]
         
@@ -217,50 +246,169 @@ class MultiSourceSearchEngine:
         print(f"🧠 Generating {len(queries)} embeddings...")
         vectors = embedding_manager.get_embeddings_batch(queries, config.embedding_model)
         
-        # Search all courts with all queries - get MORE results
+        # === HYBRID SEARCH: Keyword + Vector ===
+        all_cases: Dict[str, CaseResult] = {}
+        
+        # Step 2a: Keyword search for exact matches (if entities found)
+        if has_searchable_entities(entities):
+            print(f"🔑 Running keyword search for extracted entities...")
+            keyword_tasks = [self._keyword_search_court(court, entities) for court in courts]
+            keyword_results = await asyncio.gather(*keyword_tasks, return_exceptions=True)
+            
+            keyword_count = 0
+            for result in keyword_results:
+                if isinstance(result, Exception):
+                    continue
+                for case in result:
+                    key = case.case_number
+                    if key not in all_cases or case.relevance_score > all_cases[key].relevance_score:
+                        all_cases[key] = case
+                        keyword_count += 1
+            
+            if keyword_count > 0:
+                print(f"   🔑 Found {keyword_count} keyword matches")
+        
+        # Step 2b: Vector search for semantic similarity
         results_per_query = 30  # Get more candidates
         tasks = []
         for vector in vectors:
             for court in courts:
                 tasks.append(self._search_court(court, vector, results_per_query))
         
-        print(f"🔍 Executing {len(tasks)} searches...")
+        print(f"🔍 Executing {len(tasks)} vector searches...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Merge and deduplicate - keep best score per case
-        all_cases: Dict[str, CaseResult] = {}
+        # Merge vector results with keyword results
         for result in results:
             if isinstance(result, Exception):
                 print(f"⚠️ Search error: {result}")
                 continue
             for case in result:
                 key = case.case_number
+                # Only add if not already found by keyword search (keyword has priority)
                 if key not in all_cases or case.relevance_score > all_cases[key].relevance_score:
                     all_cases[key] = case
         
-        print(f"📊 Found {len(all_cases)} unique cases")
+        print(f"📊 Found {len(all_cases)} unique cases (hybrid)")
         
         if not all_cases:
             return []
         
-        # Sort by vector score first
+        # Step 3: Apply entity-based boosting (fail-safe)
+        if entities.has_entities():
+            print(f"🎯 Applying entity boosting...")
+            for case in all_cases.values():
+                boost = calculate_boost(case, entities)
+                if boost > 1.0:
+                    case.relevance_score *= boost
+        
+        # Sort by (boosted) vector score
         candidates = sorted(all_cases.values(), key=lambda x: x.relevance_score, reverse=True)
         
         # Take top candidates for cross-encoder reranking
         top_candidates = candidates[:50]  # Rerank top 50
         
-        # Cross-encoder reranking for precision
+        # Step 4: Cross-encoder reranking for precision
         print(f"🎯 Cross-encoder reranking {len(top_candidates)} candidates...")
-        original_query = queries[0]  # Use original query for reranking
         reranked = cross_encoder_manager.rerank(original_query, top_candidates, top_k=limit)
         
-        print(f"✅ Returning {len(reranked)} results")
-        return reranked
+        # CRITICAL: Fetch full_text from chunk 0 for chunked collections
+        print(f"📄 Fetching full text for {len(reranked)} final cases...")
+        enriched = await self._fetch_full_texts(reranked)
+        
+        print(f"✅ Returning {len(enriched)} results with full text")
+        return enriched
+    
+    async def _keyword_search_court(
+        self, court: DataSource, entities: ExtractedEntities, limit: int = 20
+    ) -> List[CaseResult]:
+        """
+        Keyword-based search using Qdrant filters.
+        Searches for exact matches on case_number and legal_references.
+        
+        This is fail-safe - returns empty list on any error.
+        """
+        config = get_configs().get(court)
+        if not config:
+            return []
+        
+        cases = []
+        
+        try:
+            filters = build_keyword_filters(entities)
+            if not filters:
+                return []
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                for filter_info in filters:
+                    try:
+                        # Use scroll with filter for keyword search
+                        response = await client.post(
+                            f"{self.qdrant_url}/collections/{config.name}/points/scroll",
+                            headers=self.headers,
+                            json={
+                                "filter": {
+                                    "should": [filter_info["condition"]]
+                                },
+                                "limit": limit,
+                                "with_payload": True,
+                            },
+                        )
+                        
+                        if response.status_code != 200:
+                            continue
+                        
+                        result = response.json().get('result', {})
+                        points = result.get('points', [])
+                        
+                        for point in points:
+                            payload = point.get("payload", {})
+                            
+                            # Get text
+                            text = (
+                                payload.get("full_text") or
+                                payload.get("chunk_text") or
+                                payload.get("subject") or
+                                ""
+                            )
+                            
+                            # High score for keyword matches
+                            score = 0.95 if filter_info["type"] == "case_number" else 0.85
+                            
+                            cases.append(CaseResult(
+                                case_number=payload.get("case_number", "N/A"),
+                                court=config.display_name,
+                                judge=payload.get("judge"),
+                                subject=text,
+                                date_issued=payload.get("date") or payload.get("date_issued"),
+                                ecli=payload.get("ecli"),
+                                keywords=payload.get("keywords", []),
+                                legal_references=payload.get("legal_references", []),
+                                source_url=payload.get("source_url"),
+                                relevance_score=score,
+                                data_source=court.value,
+                            ))
+                    
+                    except Exception as e:
+                        print(f"   ⚠️ Keyword filter error: {e}")
+                        continue
+            
+            # Deduplicate - keep best score per case
+            seen: Dict[str, CaseResult] = {}
+            for case in cases:
+                if case.case_number not in seen or case.relevance_score > seen[case.case_number].relevance_score:
+                    seen[case.case_number] = case
+            
+            return list(seen.values())
+            
+        except Exception as e:
+            print(f"⚠️ Keyword search error (non-fatal): {e}")
+            return []
     
     async def _search_court(
         self, court: DataSource, vector: List[float], limit: int
     ) -> List[CaseResult]:
-        """Search a single court"""
+        """Search a single court using vector similarity"""
         config = get_configs().get(court)
         if not config:
             return []
@@ -320,6 +468,122 @@ class MultiSourceSearchEngine:
         except Exception as e:
             print(f"⚠️ {config.display_name}: {e}")
             return []
+    
+    async def _fetch_full_texts(self, cases: List[CaseResult]) -> List[CaseResult]:
+        """
+        Fetch full_text from chunk 0 for chunked collections.
+        
+        Data structure:
+        - Chunked collections (3 courts): full_text is ONLY in chunk 0
+        - Legacy collection (general_courts): full_text is directly in payload
+        """
+        if not cases:
+            return []
+        
+        # Group cases by collection type
+        chunked_cases = []
+        legacy_cases = []
+        
+        for case in cases:
+            source = DataSource(case.data_source) if case.data_source else DataSource.SUPREME_COURT
+            config = get_configs().get(source)
+            
+            if config and config.uses_chunking:
+                chunked_cases.append((case, config))
+            else:
+                # Legacy collection already has full_text in subject
+                legacy_cases.append(case)
+        
+        # Legacy cases are already complete
+        enriched = list(legacy_cases)
+        
+        # Fetch full_text for chunked cases from chunk 0
+        if chunked_cases:
+            print(f"   📄 Fetching full_text from chunk 0 for {len(chunked_cases)} cases...")
+            tasks = [self._fetch_chunk0_full_text(case, config) for case, config in chunked_cases]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    # On exception, still include the case with its original chunk_text
+                    original_case, _ = chunked_cases[i]
+                    print(f"   ⚠️ {original_case.case_number}: Fetch error, using original chunk ({len(original_case.subject or ''):,} chars)")
+                    enriched.append(original_case)
+                elif result:
+                    enriched.append(result)
+        
+        # Maintain original order by relevance score
+        case_order = {case.case_number: i for i, case in enumerate(cases)}
+        enriched.sort(key=lambda x: case_order.get(x.case_number, 999))
+        
+        return enriched
+    
+    async def _fetch_chunk0_full_text(self, case: CaseResult, config: CollectionConfig) -> CaseResult:
+        """
+        Fetch full_text from chunk 0 for a single case.
+        ALWAYS returns the case - with full_text if found, or original chunk_text as fallback.
+        
+        Chunk 0 payload structure (from ingestion script):
+        {
+            'case_number': '...',
+            'date': '...',
+            'chunk_index': 0,
+            'total_chunks': N,
+            'chunk_text': '...',
+            'full_text': '... COMPLETE TEXT ...',  # <-- Only in chunk 0!
+            'has_full_text': True,
+            'filename': '...'
+        }
+        """
+        original_text_len = len(case.subject or "")
+        
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                # Query for chunk 0 of this case
+                response = await client.post(
+                    f"{self.qdrant_url}/collections/{config.name}/points/scroll",
+                    headers=self.headers,
+                    json={
+                        "filter": {
+                            "must": [
+                                {"key": "case_number", "match": {"value": case.case_number}},
+                                {"key": "chunk_index", "match": {"value": 0}},
+                            ]
+                        },
+                        "limit": 1,
+                        "with_payload": True,
+                    },
+                )
+                
+                if response.status_code == 200:
+                    result = response.json().get('result', {})
+                    points = result.get('points', [])
+                    
+                    if points:
+                        payload = points[0].get("payload", {})
+                        full_text = payload.get("full_text", "")
+                        
+                        if full_text:
+                            # Success! Update case.subject with full_text
+                            case.subject = full_text
+                            print(f"   ✅ {case.case_number}: {len(full_text):,} chars (was {original_text_len:,})")
+                        else:
+                            # No full_text in chunk 0, keep original
+                            print(f"   ⚠️ {case.case_number}: No full_text in chunk 0, keeping original ({original_text_len:,} chars)")
+                    else:
+                        # Chunk 0 not found, keep original
+                        print(f"   ⚠️ {case.case_number}: Chunk 0 not found, keeping original ({original_text_len:,} chars)")
+                else:
+                    # HTTP error, keep original
+                    print(f"   ⚠️ {case.case_number}: HTTP {response.status_code}, keeping original ({original_text_len:,} chars)")
+                
+                # Always return the case
+                return case
+                
+        except Exception as e:
+            # On any error, return case with original text
+            print(f"   ❌ {case.case_number}: {e}, keeping original ({original_text_len:,} chars)")
+            return case
     
     # Backward compatibility
     async def multi_query_search(
