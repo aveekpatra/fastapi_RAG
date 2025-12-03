@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import health, legal, search, multi_source
+from app.routers import health, legal, search, multi_source, law_search
 
 app = FastAPI(
     title="Czech Legal Assistant API",
@@ -40,6 +40,7 @@ app.include_router(health.router)
 app.include_router(legal.router)
 app.include_router(search.router)
 app.include_router(multi_source.router)  # New multi-source endpoints at /v2
+app.include_router(law_search.router)  # e-Sbírka law search
 
 
 if __name__ == "__main__":

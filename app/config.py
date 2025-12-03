@@ -60,6 +60,10 @@ class Settings:
     SEZNAM_EMBEDDING_MODEL: str = os.getenv("SEZNAM_EMBEDDING_MODEL", "Seznam/retromae-small-cs")
     SEZNAM_VECTOR_SIZE: int = 256
 
+    # e-Sbírka API configuration
+    ESBIRKA_API_KEY: str = os.getenv("ESBIRKA_API_KEY", "")
+    ESBIRKA_API_ENDPOINT: str = os.getenv("ESBIRKA_API_ENDPOINT", "https://opendata.eselpoint.cz/api/v1")
+
     # RAG Pipeline configuration
     NUM_GENERATED_QUERIES: int = 5  # Generate up to 5 query variants (dynamic based on complexity)
     RESULTS_PER_QUERY: int = 15  # Get more results for better reranking
