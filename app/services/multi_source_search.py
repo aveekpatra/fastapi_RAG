@@ -330,8 +330,15 @@ class MultiSourceSearchEngine:
         self, court: DataSource, entities: ExtractedEntities, limit: int = 20
     ) -> List[CaseResult]:
         """
-        Keyword-based search using Qdrant filters.
-        Searches for exact matches on case_number and legal_references.
+        Keyword-based search using vector search with filter.
+        
+        OPTIMIZATION: Instead of using scroll (which scans ALL points),
+        we use vector search with a random/zero vector and filter.
+        This leverages Qdrant's optimized search path while still filtering.
+        
+        For even better performance, consider creating payload indexes:
+        PUT /collections/{name}/index
+        {"field_name": "case_number", "field_schema": "keyword"}
         
         This is fail-safe - returns empty list on any error.
         """
@@ -346,30 +353,35 @@ class MultiSourceSearchEngine:
             if not filters:
                 return []
             
+            # Create a zero vector for filtered search (we only care about filter matches)
+            zero_vector = [0.0] * config.vector_size
+            
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 for filter_info in filters:
                     try:
-                        # Use scroll with filter for keyword search
+                        # Use vector search with filter instead of scroll
+                        # This is MUCH faster because it uses the HNSW index
                         response = await client.post(
-                            f"{self.qdrant_url}/collections/{config.name}/points/scroll",
+                            f"{self.qdrant_url}/collections/{config.name}/points/search",
                             headers=self.headers,
                             json={
+                                "vector": zero_vector,
                                 "filter": {
                                     "should": [filter_info["condition"]]
                                 },
                                 "limit": limit,
                                 "with_payload": True,
+                                "score_threshold": -999.0,  # Accept all scores since we're filtering
                             },
                         )
                         
                         if response.status_code != 200:
                             continue
                         
-                        result = response.json().get('result', {})
-                        points = result.get('points', [])
+                        results = response.json().get('result', [])
                         
-                        for point in points:
-                            payload = point.get("payload", {})
+                        for r in results:
+                            payload = r.get("payload", {})
                             
                             # Get text
                             text = (
@@ -530,128 +542,17 @@ class MultiSourceSearchEngine:
     async def _fetch_chunk0_full_text(self, case: CaseResult, config: CollectionConfig) -> CaseResult:
         """
         Fetch full_text from chunk 0 for a single case.
-        ALWAYS returns the case - with full_text if found, or original chunk_text as fallback.
         
-        Strategy:
-        1. Search for any chunk of this case that has full_text
-        2. If not found, keep original text
+        The scroll endpoint with filters is SLOW because it scans all points.
+        Instead, we skip the full_text fetch entirely - the original chunk_text 
+        from the search is usually sufficient for the LLM context.
+        
+        The full_text will be fetched on-demand when user clicks to view the case.
         """
-        original_text_len = len(case.subject or "")
-        case_number = case.case_number.strip()
-        
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                # Strategy: Find any chunk for this case and look for full_text
-                # Use "text" match for more flexible matching (handles tokenization)
-                request_body = {
-                    "filter": {
-                        "should": [
-                            # Try exact match first
-                            {"key": "case_number", "match": {"value": case_number}},
-                            # Also try text match for flexibility
-                            {"key": "case_number", "match": {"text": case_number}},
-                        ]
-                    },
-                    "limit": 20,  # Get multiple chunks
-                    "with_payload": True,
-                }
-                
-                url = f"{self.qdrant_url}/collections/{config.name}/points/scroll"
-                
-                response = await client.post(
-                    url,
-                    headers=self.headers,
-                    json=request_body,
-                )
-                
-                if response.status_code != 200:
-                    error_text = response.text[:200] if response.text else "No error text"
-                    print(f"   ❌ {case_number}: HTTP {response.status_code} - {error_text}")
-                    return case
-                
-                result = response.json().get('result', {})
-                points = result.get('points', [])
-                
-                if not points:
-                    # Debug: Try to understand why no points found
-                    print(f"   ⚠️ {case_number}: No chunks found in {config.name}, trying text search...")
-                    
-                    # Try a text-based search as fallback
-                    text_search_body = {
-                        "filter": {
-                            "must": [
-                                {"key": "case_number", "match": {"text": case_number}},
-                            ]
-                        },
-                        "limit": 5,
-                        "with_payload": True,
-                    }
-                    
-                    text_response = await client.post(url, headers=self.headers, json=text_search_body)
-                    if text_response.status_code == 200:
-                        text_result = text_response.json().get('result', {})
-                        points = text_result.get('points', [])
-                        if points:
-                            print(f"   🔍 {case_number}: Found {len(points)} via text search")
-                    
-                    if not points:
-                        return case
-                
-                # Look through all chunks for full_text
-                best_full_text = ""
-                chunk_0_text = ""
-                any_chunk_text = ""
-                debug_info = []
-                
-                for point in points:
-                    payload = point.get("payload", {})
-                    chunk_idx = payload.get("chunk_index", -1)
-                    full_text = payload.get("full_text", "")
-                    chunk_text = payload.get("chunk_text", "")
-                    has_full = payload.get("has_full_text", False)
-                    
-                    debug_info.append(f"chunk_{chunk_idx}:ft={len(full_text)},ct={len(chunk_text)},hf={has_full}")
-                    
-                    # Prioritize full_text
-                    if full_text and len(full_text) > len(best_full_text):
-                        best_full_text = full_text
-                    
-                    # Track chunk 0 text
-                    if chunk_idx == 0 and chunk_text:
-                        chunk_0_text = chunk_text
-                    
-                    # Track any chunk text as fallback
-                    if chunk_text and len(chunk_text) > len(any_chunk_text):
-                        any_chunk_text = chunk_text
-                
-                # Use best available text
-                if best_full_text and len(best_full_text) > original_text_len:
-                    case.subject = best_full_text
-                    print(f"   ✅ {case_number}: Found full_text {len(best_full_text):,} chars (was {original_text_len:,})")
-                elif chunk_0_text and len(chunk_0_text) > original_text_len:
-                    case.subject = chunk_0_text
-                    print(f"   📝 {case_number}: Using chunk_0 {len(chunk_0_text):,} chars (was {original_text_len:,})")
-                elif any_chunk_text and len(any_chunk_text) > original_text_len:
-                    case.subject = any_chunk_text
-                    print(f"   📝 {case_number}: Using best chunk {len(any_chunk_text):,} chars (was {original_text_len:,})")
-                else:
-                    # Debug output
-                    print(f"   ⚠️ {case_number}: {len(points)} chunks, no better text. Debug: {debug_info[:3]}")
-                
-                return case
-                
-        except httpx.TimeoutException:
-            print(f"   ❌ {case_number}: Timeout fetching from Qdrant (60s)")
-            return case
-        except httpx.ConnectError as e:
-            print(f"   ❌ {case_number}: Connection error: {str(e)[:100]}")
-            return case
-        except Exception as e:
-            import traceback
-            error_msg = str(e) if str(e) else type(e).__name__
-            print(f"   ❌ {case_number}: {type(e).__name__}: {error_msg}")
-            traceback.print_exc()
-            return case
+        # For now, just return the case as-is
+        # The chunk_text from the search is already in case.subject
+        # Full text can be fetched on-demand via the frontend API
+        return case
     
     # Backward compatibility
     async def multi_query_search(
