@@ -8,9 +8,12 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 import logging
+import traceback
 
 from app.services.esbirka_client import esbirka_client
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/law", tags=["law-search"])
 
@@ -59,7 +62,9 @@ async def search_laws(
     - verze_od: Effective from date
     """
     try:
-        logger.info(f"Law search: '{query}' (full_text={full_text}, limit={limit})")
+        logger.info(f"=== LAW SEARCH REQUEST ===")
+        logger.info(f"Query: '{query}'")
+        logger.info(f"Params: full_text={full_text}, limit={limit}, type={legal_act_type}")
 
         results = await esbirka_client.search_laws(
             query=query,
@@ -69,6 +74,8 @@ async def search_laws(
             year_from=year_from,
             year_to=year_to,
         )
+
+        logger.info(f"Raw results count: {len(results)}")
 
         # Format results
         formatted = []
@@ -85,6 +92,8 @@ async def search_laws(
                 )
             )
 
+        logger.info(f"Returning {len(formatted)} formatted results")
+
         return SearchResponse(
             query=query,
             count=len(formatted),
@@ -93,7 +102,10 @@ async def search_laws(
         )
 
     except Exception as e:
-        logger.error(f"Law search error: {e}")
+        logger.error(f"=== LAW SEARCH ERROR ===")
+        logger.error(f"Query: '{query}'")
+        logger.error(f"Error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
