@@ -173,6 +173,52 @@ async def combined_search(request: QueryRequest, api_key_valid: bool = Depends(v
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/web-search-stream")
+async def web_search_stream(
+    question: str = Query(..., min_length=3, max_length=5000),
+    top_k: int = Query(10, ge=1, le=25),
+    source: DataSourceEnum = Query(DataSourceEnum.ALL_COURTS),
+    api_key_valid: bool = Depends(verify_api_key_query),
+):
+    """Streaming web search only using Perplexity Sonar"""
+
+    async def generate():
+        try:
+            print(f"\n{'='*60}")
+            print(f"🌐 WEB SEARCH ONLY")
+            print(f"   Question: {question[:80]}...")
+            print(f"{'='*60}")
+            
+            yield 'data: {"type": "web_search_start"}\n\n'
+            
+            web_full = ""
+            citations = []
+            
+            async for chunk, final, cites in llm_service.get_sonar_answer_stream(question):
+                if chunk:
+                    web_full += chunk
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk})}\n\n"
+                elif final is not None:
+                    web_full = final
+                    citations = cites or []
+                    if citations:
+                        yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
+                    break
+            
+            yield 'data: {"type": "web_search_complete"}\n\n'
+            yield 'data: {"type": "complete"}\n\n'
+            
+            print(f"✅ Web search complete: {len(web_full)} chars, {len(citations)} citations")
+            
+        except Exception as e:
+            print(f"❌ Web search error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 @router.get("/combined-search-stream")
 async def combined_search_stream(
     question: str = Query(...),
@@ -186,15 +232,22 @@ async def combined_search_stream(
         try:
             internal_source = _convert_source(source)
             
+            print(f"\n{'='*60}")
+            print(f"🔄 COMBINED SEARCH")
+            print(f"   Question: {question[:80]}...")
+            print(f"{'='*60}")
+            
             # Web search
             yield 'data: {"type": "web_search_start"}\n\n'
             web_full = ""
-            async for chunk, final, citations in llm_service.get_sonar_answer_stream(question):
+            citations = []
+            async for chunk, final, cites in llm_service.get_sonar_answer_stream(question):
                 if chunk:
                     web_full += chunk
-                    yield f"data: {json.dumps({'type': 'web_chunk', 'content': chunk})}\n\n"
+                    yield f"data: {json.dumps({'type': 'web_answer_chunk', 'content': chunk})}\n\n"
                 elif final is not None:
                     web_full = final
+                    citations = cites or []
                     if citations:
                         yield f"data: {json.dumps({'type': 'web_citations', 'citations': citations})}\n\n"
                     break
@@ -202,19 +255,38 @@ async def combined_search_stream(
             
             # Case search
             yield 'data: {"type": "case_search_start"}\n\n'
+            yield 'data: {"type": "generating_queries"}\n\n'
             queries = await llm_service.generate_search_queries(question, num_queries=7)
-            cases = await multi_source_engine.search(queries, internal_source, limit=top_k)
+            yield f'data: {json.dumps({"type": "queries_generated", "count": len(queries)})}\n\n'
             
+            yield 'data: {"type": "searching"}\n\n'
+            cases = await multi_source_engine.search(queries, internal_source, limit=top_k)
+            yield f'data: {json.dumps({"type": "cases_found", "count": len(cases)})}\n\n'
+            
+            yield 'data: {"type": "generating_answer"}\n\n'
             case_full = ""
             async for chunk in llm_service.answer_based_on_cases_stream(question, cases):
                 case_full += chunk
-                yield f"data: {json.dumps({'type': 'case_chunk', 'content': chunk})}\n\n"
+                yield f"data: {json.dumps({'type': 'case_answer_chunk', 'content': chunk})}\n\n"
             
             yield 'data: {"type": "case_search_complete"}\n\n'
             
-            # Send cases
-            for case in cases:
-                yield f"data: {json.dumps({'type': 'case', 'case_number': case.case_number, 'court': case.court, 'relevance_score': round(case.relevance_score, 3)})}\n\n"
+            # Send cases with full data
+            yield 'data: {"type": "cases_start"}\n\n'
+            for idx, case in enumerate(cases):
+                full_text = case.subject or ''
+                case_data = {
+                    'type': 'case',
+                    'citation_index': idx + 1,
+                    'case_number': case.case_number,
+                    'court': case.court,
+                    'date_issued': case.date_issued,
+                    'relevance_score': round(case.relevance_score, 3),
+                    'data_source': case.data_source,
+                    'subject': full_text[:500] + '...' if len(full_text) > 500 else full_text,
+                    'full_text': full_text,
+                }
+                yield f"data: {json.dumps(case_data)}\n\n"
             
             # Summary
             if web_full and case_full:
@@ -225,7 +297,12 @@ async def combined_search_stream(
             
             yield 'data: {"type": "complete"}\n\n'
             
+            print(f"✅ Combined search complete")
+            
         except Exception as e:
+            print(f"❌ Combined search error: {e}")
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
