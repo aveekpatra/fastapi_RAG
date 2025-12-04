@@ -270,54 +270,101 @@ Délka textu: {len(text):,} znaků{truncation_note}
     
     # Sonar for web search
     async def get_sonar_answer(self, question: str) -> tuple[str, list[str]]:
+        """
+        Get Perplexity Sonar answer with citations.
+        Uses direct HTTP to access top-level citations field.
+        """
+        import httpx
+        
         try:
-            sonar = ChatOpenAI(
-                model="perplexity/sonar",
-                api_key=settings.OPENROUTER_API_KEY,
-                base_url=settings.OPENROUTER_BASE_URL,
-                temperature=0.7,
-                timeout=settings.LLM_TIMEOUT,
-            )
-            
-            response = await sonar.ainvoke([
-                SystemMessage(content="Jsi právní expert na české právo. Odpovídej česky."),
-                HumanMessage(content=question)
-            ])
-            
-            citations = []
-            if hasattr(response, "response_metadata"):
-                citations = response.response_metadata.get("citations", [])
-            
-            return response.content or "", citations
-            
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "perplexity/sonar",
+                        "messages": [
+                            {"role": "system", "content": "Jsi právní expert na české právo. Odpovídej česky. Vždy uveď zdroje."},
+                            {"role": "user", "content": question}
+                        ],
+                        "temperature": 0.7,
+                    }
+                )
+                
+                data = response.json()
+                
+                # Extract content
+                content = ""
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0].get("message", {}).get("content", "")
+                
+                # Extract citations from top level
+                citations = data.get("citations", [])
+                
+                print(f"📚 Sonar: {len(content)} chars, {len(citations)} citations")
+                
+                return content, citations
+                
         except Exception as e:
             print(f"⚠️ Sonar error: {e}")
             return "", []
     
     async def get_sonar_answer_stream(self, question: str):
+        """
+        Stream Perplexity Sonar response and extract citations.
+        Citations are returned at the top level of the OpenRouter response.
+        """
+        import httpx
+        
         try:
-            sonar = ChatOpenAI(
-                model="perplexity/sonar",
-                api_key=settings.OPENROUTER_API_KEY,
-                base_url=settings.OPENROUTER_BASE_URL,
-                temperature=0.7,
-            )
-            
-            messages = [
-                SystemMessage(content="Jsi právní expert na české právo. Odpovídej česky."),
-                HumanMessage(content=question)
-            ]
-            
-            full_answer = ""
-            async for chunk in sonar.astream(messages):
-                if chunk.content:
-                    full_answer += chunk.content
-                    yield chunk.content, None, None
-            
-            yield None, full_answer, []
-            
+            # Use direct HTTP call to get citations from top-level response
+            # LangChain doesn't expose the top-level 'citations' field
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{settings.OPENROUTER_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "perplexity/sonar",
+                        "messages": [
+                            {"role": "system", "content": "Jsi právní expert na české právo. Odpovídej česky. Vždy uveď zdroje."},
+                            {"role": "user", "content": question}
+                        ],
+                        "temperature": 0.7,
+                    }
+                )
+                
+                data = response.json()
+                
+                # Extract content
+                full_answer = ""
+                if "choices" in data and len(data["choices"]) > 0:
+                    full_answer = data["choices"][0].get("message", {}).get("content", "")
+                
+                # Extract citations from top level
+                citations = data.get("citations", [])
+                
+                print(f"📚 Sonar response: {len(full_answer)} chars, {len(citations)} citations")
+                if citations:
+                    for i, url in enumerate(citations[:5]):
+                        print(f"   [{i+1}] {url[:60]}...")
+                
+                # Yield the full answer (non-streaming for now to get citations)
+                if full_answer:
+                    yield full_answer, None, None
+                
+                yield None, full_answer, citations
+                
         except Exception as e:
-            print(f"⚠️ Sonar stream error: {e}")
+            print(f"⚠️ Sonar error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield None, "", []
             yield None, "", []
     
     async def generate_summary_stream(
